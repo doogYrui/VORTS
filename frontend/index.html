@@ -209,23 +209,17 @@
                 <div class="card-header">
                   <div>
                     <h3>1. RGB 监控</h3>
-                    <p>两个可切换视频源</p>
+                    <p>单窗口实时视频监控</p>
+                  </div>
+                  <div class="button-row">
+                    <select id="monitorRgbSelect"></select>
+                    <button class="ghost-button" type="button" id="monitorRgbFullscreenBtn">全屏</button>
                   </div>
                 </div>
-                <div class="video-mosaic">
-                  <div class="mini-stream">
-                    <select id="monitorRgbPrimarySelect"></select>
-                    <div class="stream-stage mini-stage" id="monitorRgbPrimaryStage">
-                      <img class="stream-image" id="monitorRgbPrimaryImage" alt="rgb primary" />
-                      <div class="stream-overlay" id="monitorRgbPrimaryOverlay">等待视频流</div>
-                    </div>
-                  </div>
-                  <div class="mini-stream">
-                    <select id="monitorRgbSecondarySelect"></select>
-                    <div class="stream-stage mini-stage" id="monitorRgbSecondaryStage">
-                      <img class="stream-image" id="monitorRgbSecondaryImage" alt="rgb secondary" />
-                      <div class="stream-overlay" id="monitorRgbSecondaryOverlay">等待视频流</div>
-                    </div>
+                <div class="monitor-stream-panel">
+                  <div class="stream-stage monitor-stream-stage" id="monitorRgbStage">
+                    <img class="stream-image" id="monitorRgbImage" alt="rgb monitor" />
+                    <div class="stream-overlay" id="monitorRgbOverlay">等待视频流</div>
                   </div>
                 </div>
               </article>
@@ -239,6 +233,7 @@
                   <div class="button-row">
                     <select id="pointcloudSourceSelect"></select>
                     <button class="ghost-button" type="button" id="pointcloudResetBtn">重置视角</button>
+                    <button class="ghost-button" type="button" id="pointcloudFullscreenBtn">全屏</button>
                   </div>
                 </div>
                 <div class="pointcloud-stage" id="pointcloudViewport"></div>
@@ -249,21 +244,17 @@
                 <div class="card-header">
                   <div>
                     <h3>3. 全局监控</h3>
-                    <p>两个固定监控画面</p>
+                    <p>单窗口全局监控源</p>
+                  </div>
+                  <div class="button-row">
+                    <select id="globalMonitorSelect"></select>
+                    <button class="ghost-button" type="button" id="globalMonitorFullscreenBtn">全屏</button>
                   </div>
                 </div>
-                <div class="video-mosaic">
-                  <div class="mini-stream">
-                    <div class="stream-stage mini-stage" id="globalMonitorStageA">
-                      <img class="stream-image" id="globalMonitorImageA" alt="global monitor a" />
-                      <div class="stream-overlay" id="globalMonitorOverlayA">等待视频流</div>
-                    </div>
-                  </div>
-                  <div class="mini-stream">
-                    <div class="stream-stage mini-stage" id="globalMonitorStageB">
-                      <img class="stream-image" id="globalMonitorImageB" alt="global monitor b" />
-                      <div class="stream-overlay" id="globalMonitorOverlayB">等待视频流</div>
-                    </div>
+                <div class="monitor-stream-panel">
+                  <div class="stream-stage monitor-stream-stage" id="globalMonitorStage">
+                    <img class="stream-image" id="globalMonitorImage" alt="global monitor" />
+                    <div class="stream-overlay" id="globalMonitorOverlay">等待视频流</div>
                   </div>
                 </div>
               </article>
@@ -274,9 +265,14 @@
                     <h3>4. Scene Graph</h3>
                     <p>全局二维关系图</p>
                   </div>
-                  <span class="pill pill-info" id="sceneGraphStatus">WS 未连接</span>
+                  <div class="button-row">
+                    <span class="pill pill-info" id="sceneGraphStatus">WS 未连接</span>
+                    <button class="ghost-button" type="button" id="sceneGraphFullscreenBtn">全屏</button>
+                  </div>
                 </div>
-                <canvas class="scene-graph-canvas" id="sceneGraphCanvas" width="640" height="360"></canvas>
+                <div class="scene-graph-stage" id="sceneGraphStage">
+                  <canvas class="scene-graph-canvas" id="sceneGraphCanvas" width="640" height="360"></canvas>
+                </div>
               </article>
             </div>
           </div>

@@ -28,6 +28,8 @@ export class MonitorPage {
     this.pointcloudSocket = null;
     this.sceneGraphSocket = null;
     this.latestSceneGraph = null;
+    this.sceneGraphResizeObserver = null;
+    this.pointcloudResizeObserver = null;
 
     this.taskBusyPillEl = document.getElementById("taskBusyPill");
     this.taskStatusTextEl = document.getElementById("taskStatusText");
@@ -35,42 +37,47 @@ export class MonitorPage {
     this.taskTypeSelectEl = document.getElementById("taskTypeSelect");
     this.taskContentInputEl = document.getElementById("taskContentInput");
     this.clearTaskBtn = document.getElementById("clearTaskBtn");
+
+    this.rgbSelectEl = document.getElementById("monitorRgbSelect");
+    this.rgbStageEl = document.getElementById("monitorRgbStage");
+    this.globalSelectEl = document.getElementById("globalMonitorSelect");
+    this.globalStageEl = document.getElementById("globalMonitorStage");
+
     this.pointcloudSourceSelectEl = document.getElementById("pointcloudSourceSelect");
     this.pointcloudMetaEl = document.getElementById("pointcloudMeta");
-    this.sceneGraphStatusEl = document.getElementById("sceneGraphStatus");
-    this.sceneGraphCanvas = document.getElementById("sceneGraphCanvas");
     this.pointcloudViewport = document.getElementById("pointcloudViewport");
-    this.primarySelectEl = document.getElementById("monitorRgbPrimarySelect");
-    this.secondarySelectEl = document.getElementById("monitorRgbSecondarySelect");
     this.resetPointcloudBtn = document.getElementById("pointcloudResetBtn");
+
+    this.sceneGraphStatusEl = document.getElementById("sceneGraphStatus");
+    this.sceneGraphStageEl = document.getElementById("sceneGraphStage");
+    this.sceneGraphCanvas = document.getElementById("sceneGraphCanvas");
+
+    this.monitorRgbFullscreenBtn = document.getElementById("monitorRgbFullscreenBtn");
+    this.pointcloudFullscreenBtn = document.getElementById("pointcloudFullscreenBtn");
+    this.globalMonitorFullscreenBtn = document.getElementById("globalMonitorFullscreenBtn");
+    this.sceneGraphFullscreenBtn = document.getElementById("sceneGraphFullscreenBtn");
 
     this.videoSources = [];
     this.pointcloudSources = [];
 
-    this.primaryPlayer = new JpegStreamPlayer({
+    this.rgbPlayer = new JpegStreamPlayer({
       baseWsUrl,
-      stageEl: document.getElementById("monitorRgbPrimaryStage"),
-      imageEl: document.getElementById("monitorRgbPrimaryImage"),
-      overlayEl: document.getElementById("monitorRgbPrimaryOverlay"),
+      stageEl: this.rgbStageEl,
+      imageEl: document.getElementById("monitorRgbImage"),
+      overlayEl: document.getElementById("monitorRgbOverlay"),
     });
-    this.secondaryPlayer = new JpegStreamPlayer({
+
+    this.globalPlayer = new JpegStreamPlayer({
       baseWsUrl,
-      stageEl: document.getElementById("monitorRgbSecondaryStage"),
-      imageEl: document.getElementById("monitorRgbSecondaryImage"),
-      overlayEl: document.getElementById("monitorRgbSecondaryOverlay"),
+      stageEl: this.globalStageEl,
+      imageEl: document.getElementById("globalMonitorImage"),
+      overlayEl: document.getElementById("globalMonitorOverlay"),
     });
-    this.globalPlayerA = new JpegStreamPlayer({
-      baseWsUrl,
-      stageEl: document.getElementById("globalMonitorStageA"),
-      imageEl: document.getElementById("globalMonitorImageA"),
-      overlayEl: document.getElementById("globalMonitorOverlayA"),
-    });
-    this.globalPlayerB = new JpegStreamPlayer({
-      baseWsUrl,
-      stageEl: document.getElementById("globalMonitorStageB"),
-      imageEl: document.getElementById("globalMonitorImageB"),
-      overlayEl: document.getElementById("globalMonitorOverlayB"),
-    });
+
+    this.onFullscreenChange = () => {
+      this.#resizePointcloud();
+      this.#resizeSceneGraph();
+    };
   }
 
   async init() {
@@ -82,25 +89,35 @@ export class MonitorPage {
     this.videoSources = videoSources;
     this.pointcloudSources = pointcloudSources;
 
-    this.#populateVideoSelect(this.primarySelectEl, 0);
-    this.#populateVideoSelect(this.secondarySelectEl, 1);
+    const firstVideoValue = this.videoSources[0]
+      ? `${this.videoSources[0].robot}/${this.videoSources[0].source}`
+      : "";
+    const defaultGlobalSource = this.videoSources.find((item) => item.robot === "piper" && item.source === "arm_full");
+    const defaultGlobalValue = defaultGlobalSource
+      ? `${defaultGlobalSource.robot}/${defaultGlobalSource.source}`
+      : firstVideoValue;
+
+    this.#populateVideoSelect(this.rgbSelectEl, firstVideoValue);
+    this.#populateVideoSelect(this.globalSelectEl, defaultGlobalValue);
     this.#populatePointcloudSelect();
 
-    this.primarySelectEl.addEventListener("change", () => this.#updateRgbPlayers());
-    this.secondarySelectEl.addEventListener("change", () => this.#updateRgbPlayers());
+    this.rgbSelectEl.addEventListener("change", () => this.#updateRgbPlayer());
+    this.globalSelectEl.addEventListener("change", () => this.#updateGlobalPlayer());
     this.taskFormEl.addEventListener("submit", (event) => this.#handleTaskSubmit(event));
     this.clearTaskBtn.addEventListener("click", () => this.#handleTaskClear());
     this.pointcloudSourceSelectEl.addEventListener("change", () => this.#restartPointcloudSocket());
     this.resetPointcloudBtn.addEventListener("click", () => this.#resetPointcloudCamera());
 
+    this.monitorRgbFullscreenBtn.addEventListener("click", () => this.#toggleFullscreen(this.rgbStageEl));
+    this.pointcloudFullscreenBtn.addEventListener("click", () => this.#toggleFullscreen(this.pointcloudViewport));
+    this.globalMonitorFullscreenBtn.addEventListener("click", () => this.#toggleFullscreen(this.globalStageEl));
+    this.sceneGraphFullscreenBtn.addEventListener("click", () => this.#toggleFullscreen(this.sceneGraphStageEl));
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
+
     this.#setupPointcloudScene();
     this.#setupSceneGraphCanvas();
-    this.#updateRgbPlayers();
-
-    const piperArm = this.videoSources.find((item) => item.robot === "piper" && item.source === "arm_full");
-    const piperSide = this.videoSources.find((item) => item.robot === "piper" && item.source === "side");
-    this.globalPlayerA.setSource(piperArm || null);
-    this.globalPlayerB.setSource(piperSide || null);
+    this.#updateRgbPlayer();
+    this.#updateGlobalPlayer();
   }
 
   setActive(active) {
@@ -110,10 +127,8 @@ export class MonitorPage {
     this.active = active;
 
     if (active) {
-      this.primaryPlayer.resume();
-      this.secondaryPlayer.resume();
-      this.globalPlayerA.resume();
-      this.globalPlayerB.resume();
+      this.rgbPlayer.resume();
+      this.globalPlayer.resume();
       this.#restartPointcloudSocket();
       this.#startSceneGraphSocket();
       this.#refreshTaskStatus();
@@ -123,21 +138,19 @@ export class MonitorPage {
 
     window.clearInterval(this.taskTimer);
     this.taskTimer = null;
-    this.primaryPlayer.suspend();
-    this.secondaryPlayer.suspend();
-    this.globalPlayerA.suspend();
-    this.globalPlayerB.suspend();
+    this.rgbPlayer.suspend();
+    this.globalPlayer.suspend();
     this.#stopPointcloudSocket();
     this.#stopSceneGraphSocket();
   }
 
-  #populateVideoSelect(selectEl, defaultIndex) {
+  #populateVideoSelect(selectEl, selectedValue) {
     selectEl.innerHTML = "";
     this.videoSources.forEach((source, index) => {
       const option = document.createElement("option");
       option.value = `${source.robot}/${source.source}`;
       option.textContent = source.label;
-      if (index === defaultIndex) {
+      if ((selectedValue && option.value === selectedValue) || (!selectedValue && index === 0)) {
         option.selected = true;
       }
       selectEl.appendChild(option);
@@ -158,9 +171,12 @@ export class MonitorPage {
     return this.videoSources.find((item) => `${item.robot}/${item.source}` === value) || null;
   }
 
-  #updateRgbPlayers() {
-    this.primaryPlayer.setSource(this.#findVideoSource(this.primarySelectEl.value));
-    this.secondaryPlayer.setSource(this.#findVideoSource(this.secondarySelectEl.value));
+  #updateRgbPlayer() {
+    this.rgbPlayer.setSource(this.#findVideoSource(this.rgbSelectEl.value));
+  }
+
+  #updateGlobalPlayer() {
+    this.globalPlayer.setSource(this.#findVideoSource(this.globalSelectEl.value));
   }
 
   async #handleTaskSubmit(event) {
@@ -244,8 +260,8 @@ export class MonitorPage {
     this.#resizePointcloud();
     this.#animatePointcloud();
 
-    const resizeObserver = new ResizeObserver(() => this.#resizePointcloud());
-    resizeObserver.observe(this.pointcloudViewport);
+    this.pointcloudResizeObserver = new ResizeObserver(() => this.#resizePointcloud());
+    this.pointcloudResizeObserver.observe(this.pointcloudViewport);
   }
 
   #animatePointcloud() {
@@ -255,6 +271,10 @@ export class MonitorPage {
   }
 
   #resizePointcloud() {
+    if (!this.renderer || !this.camera) {
+      return;
+    }
+
     const width = this.pointcloudViewport.clientWidth || 640;
     const height = this.pointcloudViewport.clientHeight || 280;
     this.renderer.setSize(width, height, false);
@@ -326,16 +346,10 @@ export class MonitorPage {
 
   #setupSceneGraphCanvas() {
     this.sceneGraphCtx = this.sceneGraphCanvas.getContext("2d");
-    const resize = () => {
-      const devicePixelRatio = window.devicePixelRatio || 1;
-      const rect = this.sceneGraphCanvas.getBoundingClientRect();
-      this.sceneGraphCanvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio));
-      this.sceneGraphCanvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
-      this.sceneGraphCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-      this.#drawSceneGraph(this.latestSceneGraph);
-    };
-    resize();
-    window.addEventListener("resize", resize);
+    this.#resizeSceneGraph();
+    this.sceneGraphResizeObserver = new ResizeObserver(() => this.#resizeSceneGraph());
+    this.sceneGraphResizeObserver.observe(this.sceneGraphStageEl);
+    window.addEventListener("resize", () => this.#resizeSceneGraph());
   }
 
   #startSceneGraphSocket() {
@@ -371,6 +385,41 @@ export class MonitorPage {
       this.sceneGraphSocket = null;
     }
     setPill(this.sceneGraphStatusEl, "WS 未连接", "info");
+  }
+
+  #resizeSceneGraph() {
+    if (!this.sceneGraphCtx || !this.sceneGraphStageEl) {
+      return;
+    }
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const rect = this.sceneGraphStageEl.getBoundingClientRect();
+    this.sceneGraphCanvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio));
+    this.sceneGraphCanvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
+    this.sceneGraphCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    this.#drawSceneGraph(this.latestSceneGraph);
+  }
+
+  async #toggleFullscreen(element) {
+    if (!element) {
+      return;
+    }
+
+    try {
+      if (document.fullscreenElement === element) {
+        await document.exitFullscreen();
+        return;
+      }
+
+      if (document.fullscreenElement && document.fullscreenElement !== element) {
+        await document.exitFullscreen();
+      }
+
+      await element.requestFullscreen();
+    } catch (error) {
+      console.error("Failed to toggle fullscreen", error);
+      this.notify(`全屏切换失败: ${error.message}`, "warning");
+    }
   }
 
   #drawSceneGraph(graph) {
