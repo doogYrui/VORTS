@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VORTS Robot Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <span class="brand-mark">VORTS</span>
+          <div>
+            <h1>Robot Control Demo</h1>
+            <p>FastAPI + ZMQ + WebSocket + Native Web</p>
+          </div>
+        </div>
+        <nav class="nav-tabs">
+          <button class="nav-tab is-active" data-page="home">首页</button>
+          <button class="nav-tab" data-page="teleop">机器人遥操</button>
+          <button class="nav-tab" data-page="monitor">监控与协作任务</button>
+        </nav>
+        <div class="topbar-meta">
+          <span class="pill pill-info" id="backendBadge">后端检测中</span>
+        </div>
+      </header>
+
+      <main class="page-stack">
+        <section class="page is-active" data-page="home">
+          <div class="home-grid">
+            <article class="card hero-card">
+              <div class="eyebrow">Server Overview</div>
+              <h2>公网访问与机器人内网桥接 Demo</h2>
+              <p>
+                当前页面展示指定网卡的整体上下行流量、最近 60 秒历史曲线，以及浏览器到后端的 RTT。
+              </p>
+              <div class="hero-stats">
+                <div>
+                  <span class="meta-label">监控网卡</span>
+                  <strong id="homeInterface">-</strong>
+                </div>
+                <div>
+                  <span class="meta-label">任务状态</span>
+                  <strong id="homeTaskText">空闲</strong>
+                </div>
+                <div>
+                  <span class="meta-label">最近更新时间</span>
+                  <strong id="homeUpdatedAt">-</strong>
+                </div>
+              </div>
+            </article>
+
+            <article class="card metric-card">
+              <div class="metric-label">当前 RTT</div>
+              <div class="metric-value"><span id="rttValue">--</span><small>ms</small></div>
+              <span class="pill pill-info" id="rttStatus">WS 连接中</span>
+            </article>
+
+            <article class="card metric-card">
+              <div class="metric-label">当前上行</div>
+              <div class="metric-value"><span id="uploadValue">0.00</span><small>KB/s</small></div>
+              <span class="metric-subtle">server 指定网卡总上行</span>
+            </article>
+
+            <article class="card metric-card">
+              <div class="metric-label">当前下行</div>
+              <div class="metric-value"><span id="downloadValue">0.00</span><small>KB/s</small></div>
+              <span class="metric-subtle">server 指定网卡总下行</span>
+            </article>
+
+            <article class="card chart-card">
+              <div class="card-header">
+                <div>
+                  <h3>流量仪表盘</h3>
+                  <p>每秒刷新一次</p>
+                </div>
+              </div>
+              <div class="chart" id="networkGaugeChart"></div>
+            </article>
+
+            <article class="card chart-card chart-card-wide">
+              <div class="card-header">
+                <div>
+                  <h3>最近 60 秒流量历史</h3>
+                  <p>单位 KB/s</p>
+                </div>
+              </div>
+              <div class="chart" id="networkHistoryChart"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page="teleop">
+          <div class="split-layout">
+            <article class="card side-card">
+              <div class="card-header">
+                <div>
+                  <h3>遥操控制</h3>
+                  <p>持续发送当前按键状态，30Hz</p>
+                </div>
+                <span class="pill pill-info" id="teleopSocketStatus">WS 未连接</span>
+              </div>
+
+              <label class="field">
+                <span>选择机器人</span>
+                <select id="teleopRobotSelect"></select>
+              </label>
+
+              <label class="field">
+                <span>视频来源</span>
+                <select id="teleopCameraSelect"></select>
+              </label>
+
+              <div class="info-card">
+                <div class="meta-label">按键说明</div>
+                <div class="key-grid" id="teleopKeyGrid">
+                  <button type="button" class="key-chip" data-key="w">W</button>
+                  <button type="button" class="key-chip" data-key="a">A</button>
+                  <button type="button" class="key-chip" data-key="s">S</button>
+                  <button type="button" class="key-chip" data-key="d">D</button>
+                  <button type="button" class="key-chip" data-key="q">Q</button>
+                  <button type="button" class="key-chip" data-key="e">E</button>
+                </div>
+              </div>
+
+              <div class="info-card">
+                <div class="meta-label">当前按键</div>
+                <div class="pressed-keys" id="teleopPressedKeys">[]</div>
+              </div>
+
+              <div class="info-card">
+                <div class="meta-label">提示</div>
+                <p>仅在遥操页面激活时发送控制。`piper` 不参与遥操。</p>
+              </div>
+            </article>
+
+            <article class="card stream-card">
+              <div class="card-header">
+                <div>
+                  <h3>机器人视频</h3>
+                  <p id="teleopVideoLabel">等待选择视频源</p>
+                </div>
+                <button class="ghost-button" id="teleopFullscreenBtn" type="button">全屏</button>
+              </div>
+              <div class="stream-stage" id="teleopStage">
+                <img class="stream-image" id="teleopVideoImage" alt="teleop video" />
+                <div class="stream-overlay" id="teleopVideoOverlay">等待视频流</div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page" data-page="monitor">
+          <div class="monitor-layout">
+            <aside class="monitor-sidebar">
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <h3>任务派发</h3>
+                    <p>busy 时拒绝新任务</p>
+                  </div>
+                  <span class="pill pill-success" id="taskBusyPill">Idle</span>
+                </div>
+
+                <form id="taskForm" class="form-stack">
+                  <label class="field">
+                    <span>任务类型</span>
+                    <select id="taskTypeSelect">
+                      <option value="benchmark2">benchmark2</option>
+                      <option value="benchmark3">benchmark3</option>
+                      <option value="corobot">corobot</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span>任务内容</span>
+                    <textarea
+                      id="taskContentInput"
+                      rows="5"
+                      placeholder="例如：让 galaxy 和 ysc 去 A 点协同执行巡检"
+                    ></textarea>
+                  </label>
+
+                  <div class="button-row">
+                    <button class="primary-button" type="submit">发送任务</button>
+                    <button class="ghost-button" type="button" id="clearTaskBtn">清空任务</button>
+                  </div>
+                </form>
+
+                <div class="task-status-box" id="taskStatusBox">
+                  <div class="meta-label">当前任务</div>
+                  <pre id="taskStatusText">空闲</pre>
+                </div>
+              </article>
+            </aside>
+
+            <div class="quad-grid">
+              <article class="card quad-card">
+                <div class="card-header">
+                  <div>
+                    <h3>1. RGB 监控</h3>
+                    <p>两个可切换视频源</p>
+                  </div>
+                </div>
+                <div class="video-mosaic">
+                  <div class="mini-stream">
+                    <select id="monitorRgbPrimarySelect"></select>
+                    <div class="stream-stage mini-stage" id="monitorRgbPrimaryStage">
+                      <img class="stream-image" id="monitorRgbPrimaryImage" alt="rgb primary" />
+                      <div class="stream-overlay" id="monitorRgbPrimaryOverlay">等待视频流</div>
+                    </div>
+                  </div>
+                  <div class="mini-stream">
+                    <select id="monitorRgbSecondarySelect"></select>
+                    <div class="stream-stage mini-stage" id="monitorRgbSecondaryStage">
+                      <img class="stream-image" id="monitorRgbSecondaryImage" alt="rgb secondary" />
+                      <div class="stream-overlay" id="monitorRgbSecondaryOverlay">等待视频流</div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card quad-card">
+                <div class="card-header">
+                  <div>
+                    <h3>2. 点云</h3>
+                    <p>Three.js 交互查看</p>
+                  </div>
+                  <div class="button-row">
+                    <select id="pointcloudSourceSelect"></select>
+                    <button class="ghost-button" type="button" id="pointcloudResetBtn">重置视角</button>
+                  </div>
+                </div>
+                <div class="pointcloud-stage" id="pointcloudViewport"></div>
+                <div class="pointcloud-meta" id="pointcloudMeta">等待点云连接</div>
+              </article>
+
+              <article class="card quad-card">
+                <div class="card-header">
+                  <div>
+                    <h3>3. 全局监控</h3>
+                    <p>两个固定监控画面</p>
+                  </div>
+                </div>
+                <div class="video-mosaic">
+                  <div class="mini-stream">
+                    <div class="stream-stage mini-stage" id="globalMonitorStageA">
+                      <img class="stream-image" id="globalMonitorImageA" alt="global monitor a" />
+                      <div class="stream-overlay" id="globalMonitorOverlayA">等待视频流</div>
+                    </div>
+                  </div>
+                  <div class="mini-stream">
+                    <div class="stream-stage mini-stage" id="globalMonitorStageB">
+                      <img class="stream-image" id="globalMonitorImageB" alt="global monitor b" />
+                      <div class="stream-overlay" id="globalMonitorOverlayB">等待视频流</div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card quad-card">
+                <div class="card-header">
+                  <div>
+                    <h3>4. Scene Graph</h3>
+                    <p>全局二维关系图</p>
+                  </div>
+                  <span class="pill pill-info" id="sceneGraphStatus">WS 未连接</span>
+                </div>
+                <canvas class="scene-graph-canvas" id="sceneGraphCanvas" width="640" height="360"></canvas>
+              </article>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="status-bar" id="statusBar"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
