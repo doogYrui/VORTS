@@ -1,0 +1,36 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+backend/logs/
+mock_robots/logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Frontend / tooling
+node_modules/
+dist/
+build/
+
+# Generated docs and exports
+docs/*.pdf
+
+# Editor temp files
+*.swp
+*.swo
+*~
