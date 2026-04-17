@@ -57,8 +57,9 @@ VORTS/
 ## 安装依赖
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+cd /path/to/VORTS
+conda create -n VORTS python=3.11
+conda activate VORTS
 pip install -r requirements.txt
 ```
 
@@ -69,7 +70,7 @@ pip install -r requirements.txt
 ### 1. 启动后端
 
 ```bash
-source .venv/bin/activate
+conda activate VORTS
 python -m backend.app
 ```
 
@@ -78,14 +79,14 @@ python -m backend.app
 如果自动识别的公网 IPv6 网卡不对，可以手动指定：
 
 ```bash
-source .venv/bin/activate
+conda activate VORTS
 PUBLIC_INTERFACE=eth0 python -m backend.app
 ```
 
 ### 2. 启动 mock 机器人
 
 ```bash
-source .venv/bin/activate
+conda activate VORTS
 python -m mock_robots.run_mock_robots
 ```
 
