@@ -511,13 +511,28 @@ def topic_to_video_key(topic: str) -> str | None:
 async def video_zmq_loop(app: FastAPI) -> None:
     socket = app.state.video_sub_socket
     broker = app.state.video_broker
+    meta_broker = app.state.video_meta_broker
 
     while True:
-        topic_raw, payload = await socket.recv_multipart()
+        message = await socket.recv_multipart()
+        if len(message) == 2:
+            topic_raw, payload = message
+            metadata = None
+        elif len(message) >= 3:
+            topic_raw, metadata_raw, payload = message[:3]
+            try:
+                metadata = json.loads(metadata_raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                metadata = None
+        else:
+            continue
+
         topic = topic_raw.decode("utf-8", errors="ignore")
         key = topic_to_video_key(topic)
         if key:
             broker.publish(key, payload)
+            if metadata is not None:
+                meta_broker.publish(key, metadata)
 
 
 @asynccontextmanager
@@ -536,6 +551,7 @@ async def lifespan(app: FastAPI):
     app.state.control_pub_socket = control_pub_socket
     app.state.video_sub_socket = video_sub_socket
     app.state.video_broker = StreamBroker("video")
+    app.state.video_meta_broker = StreamBroker("video_meta")
 
     video_task = asyncio.create_task(video_zmq_loop(app), name="webxr-video-zmq")
 
@@ -590,6 +606,22 @@ async def websocket_video(websocket: WebSocket, robot_name: str, camera_name: st
         pass
     finally:
         app.state.video_broker.unsubscribe(key, queue)
+
+
+@app.websocket("/ws/video_meta/{robot_name}/{camera_name}")
+async def websocket_video_meta(websocket: WebSocket, robot_name: str, camera_name: str):
+    await websocket.accept()
+    key = f"{robot_name}/{camera_name}"
+    queue = app.state.video_meta_broker.subscribe(key)
+
+    try:
+        while True:
+            payload = await queue.get()
+            await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        app.state.video_meta_broker.unsubscribe(key, queue)
 
 
 app.mount("/", StaticFiles(directory=str(ROOT), html=True), name="static")

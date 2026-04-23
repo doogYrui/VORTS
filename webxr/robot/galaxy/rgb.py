@@ -1,5 +1,6 @@
 import sys
 import time
+import json
 import cv2
 import numpy as np
 import pyrealsense2 as rs
@@ -75,8 +76,19 @@ def main():
                 cv2.LINE_AA,
             )
 
+            capture_ts = time.time()
             jpeg_bytes = encode_jpeg(image)
-            socket.send_multipart([f"video.{ROBOT_NAME}.{CAMERA_NAME}".encode("utf-8"), jpeg_bytes])
+            metadata = json.dumps(
+                {
+                    "capture_ts": capture_ts,
+                    "camera": CAMERA_NAME,
+                    "robot": ROBOT_NAME,
+                    "width": WIDTH,
+                    "height": HEIGHT,
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            socket.send_multipart([f"video.{ROBOT_NAME}.{CAMERA_NAME}".encode("utf-8"), metadata, jpeg_bytes])
 
             cv2.imshow("Single RealSense Color", image)
 

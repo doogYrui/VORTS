@@ -30,6 +30,10 @@ build/
 # Generated docs and exports
 docs/*.pdf
 
+# Local certificates
+webxr/*.pem
+webxr/*-key.pem
+
 # Editor temp files
 *.swp
 *.swo

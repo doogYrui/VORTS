@@ -3,6 +3,7 @@ const logEl = document.getElementById("log");
 const canvas = document.getElementById("xr-canvas");
 const robotVideoEl = document.getElementById("robotVideo");
 const videoStatusEl = document.getElementById("videoStatus");
+const latencyStatusEl = document.getElementById("latencyStatus");
 
 let xrSession = null;
 let xrRefSpace = null;
@@ -17,17 +18,21 @@ let videoFrameDirty = false;
 let latestVideoBitmap = null;
 let pendingVideoBlob = null;
 let bitmapDecodeInFlight = false;
-let lastTextureUploadAt = 0;
+let videoMetaSocket = null;
+let currentLatencyMs = null;
+let infoTextureDirty = true;
 
 let videoPanelRenderer = null;
 let panelPose = null;
+let infoPanelRenderer = null;
 
 const handlerUrl = "/quest-data";
 const VIDEO_PANEL_DISTANCE = 1.2;
 const VIDEO_PANEL_DROP = 0.15;
 const VIDEO_PANEL_WIDTH = 1.2;
 const VIDEO_PANEL_HEIGHT = 0.9;
-const VIDEO_TEXTURE_UPDATE_INTERVAL_MS = 66;
+const INFO_PANEL_WIDTH = 1.0;
+const INFO_PANEL_HEIGHT = 0.16;
 
 function formatNumber(value) {
   return Number(value.toFixed(4));
@@ -188,7 +193,15 @@ function initializePanelPose(viewerTransform) {
   const yaw = Math.atan2(panelNormal[0], panelNormal[2]);
 
   panelPose = {
-    modelMatrix: createPanelModelMatrix(panelPosition, yaw)
+    modelMatrix: createPanelModelMatrix(panelPosition, yaw),
+    infoModelMatrix: createPanelModelMatrix(
+      {
+        x: panelPosition.x,
+        y: panelPosition.y + VIDEO_PANEL_HEIGHT / 2 + 0.14,
+        z: panelPosition.z
+      },
+      yaw
+    )
   };
 }
 
@@ -265,11 +278,78 @@ function initVideoPanelRenderer(glContext) {
   };
 }
 
+function initInfoPanelRenderer(glContext) {
+  const texture = glContext.createTexture();
+  glContext.bindTexture(glContext.TEXTURE_2D, texture);
+  glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_WRAP_S, glContext.CLAMP_TO_EDGE);
+  glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_WRAP_T, glContext.CLAMP_TO_EDGE);
+  glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_MIN_FILTER, glContext.LINEAR);
+  glContext.texParameteri(glContext.TEXTURE_2D, glContext.TEXTURE_MAG_FILTER, glContext.LINEAR);
+  glContext.texImage2D(
+    glContext.TEXTURE_2D,
+    0,
+    glContext.RGBA,
+    1,
+    1,
+    0,
+    glContext.RGBA,
+    glContext.UNSIGNED_BYTE,
+    new Uint8Array([20, 20, 20, 220])
+  );
+
+  const canvasEl = document.createElement("canvas");
+  canvasEl.width = 512;
+  canvasEl.height = 96;
+  const context2d = canvasEl.getContext("2d");
+
+  infoPanelRenderer = {
+    texture,
+    canvasEl,
+    context2d
+  };
+}
+
+function updateInfoStatusText(latencyMs) {
+  currentLatencyMs = latencyMs;
+  latencyStatusEl.textContent =
+    latencyMs == null ? "当前视频延迟: -- ms" : `当前视频延迟: ${latencyMs} ms`;
+  infoTextureDirty = true;
+}
+
+function updateInfoTexture(glContext) {
+  if (!infoPanelRenderer || !videoPanelRenderer || !infoTextureDirty) return;
+
+  const { canvasEl, context2d, texture } = infoPanelRenderer;
+  context2d.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  context2d.fillStyle = "rgba(16, 16, 16, 0.86)";
+  context2d.fillRect(0, 0, canvasEl.width, canvasEl.height);
+  context2d.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  context2d.lineWidth = 2;
+  context2d.strokeRect(1, 1, canvasEl.width - 2, canvasEl.height - 2);
+  context2d.fillStyle = "#9ecbff";
+  context2d.font = "bold 30px sans-serif";
+  context2d.textAlign = "center";
+  context2d.textBaseline = "middle";
+  const text =
+    currentLatencyMs == null ? "Video latency: -- ms" : `Video latency: ${currentLatencyMs} ms`;
+  context2d.fillText(text, canvasEl.width / 2, canvasEl.height / 2);
+
+  glContext.bindTexture(glContext.TEXTURE_2D, texture);
+  glContext.texImage2D(
+    glContext.TEXTURE_2D,
+    0,
+    glContext.RGBA,
+    glContext.RGBA,
+    glContext.UNSIGNED_BYTE,
+    canvasEl
+  );
+
+  infoTextureDirty = false;
+}
+
 function updateVideoTexture(glContext) {
   if (!videoPanelRenderer) return;
   if (!videoFrameDirty) return;
-  const now = performance.now();
-  if (now - lastTextureUploadAt < VIDEO_TEXTURE_UPDATE_INTERVAL_MS) return;
 
   const textureSource =
     latestVideoBitmap ||
@@ -287,7 +367,6 @@ function updateVideoTexture(glContext) {
     textureSource
   );
   videoFrameDirty = false;
-  lastTextureUploadAt = now;
 }
 
 function renderVideoPanel(glContext, view) {
@@ -308,6 +387,35 @@ function renderVideoPanel(glContext, view) {
   glContext.uniformMatrix4fv(videoPanelRenderer.mvpLocation, false, mvp);
   glContext.activeTexture(glContext.TEXTURE0);
   glContext.bindTexture(glContext.TEXTURE_2D, videoPanelRenderer.texture);
+  glContext.uniform1i(videoPanelRenderer.textureLocation, 0);
+  glContext.drawArrays(glContext.TRIANGLES, 0, 6);
+}
+
+function renderInfoPanel(glContext, view) {
+  if (!videoPanelRenderer || !infoPanelRenderer || !panelPose) return;
+
+  const scaleMatrix = new Float32Array([
+    INFO_PANEL_WIDTH / VIDEO_PANEL_WIDTH, 0, 0, 0,
+    0, INFO_PANEL_HEIGHT / VIDEO_PANEL_HEIGHT, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1
+  ]);
+
+  const modelMatrix = multiplyMatrices(panelPose.infoModelMatrix, scaleMatrix);
+  const mvp = multiplyMatrices(
+    view.projectionMatrix,
+    multiplyMatrices(view.transform.inverse.matrix, modelMatrix)
+  );
+
+  glContext.useProgram(videoPanelRenderer.program);
+  glContext.bindBuffer(glContext.ARRAY_BUFFER, videoPanelRenderer.vertexBuffer);
+  glContext.enableVertexAttribArray(videoPanelRenderer.positionLocation);
+  glContext.vertexAttribPointer(videoPanelRenderer.positionLocation, 3, glContext.FLOAT, false, 20, 0);
+  glContext.enableVertexAttribArray(videoPanelRenderer.texCoordLocation);
+  glContext.vertexAttribPointer(videoPanelRenderer.texCoordLocation, 2, glContext.FLOAT, false, 20, 12);
+  glContext.uniformMatrix4fv(videoPanelRenderer.mvpLocation, false, mvp);
+  glContext.activeTexture(glContext.TEXTURE0);
+  glContext.bindTexture(glContext.TEXTURE_2D, infoPanelRenderer.texture);
   glContext.uniform1i(videoPanelRenderer.textureLocation, 0);
   glContext.drawArrays(glContext.TRIANGLES, 0, 6);
 }
@@ -361,6 +469,34 @@ function connectRobotVideo() {
 
   videoSocket.addEventListener("error", () => {
     setVideoStatus("机器人视频连接失败");
+  });
+}
+
+function connectRobotVideoMeta() {
+  const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+  const wsUrl = `${wsProtocol}://${location.host}/ws/video_meta/galaxy/rgb`;
+
+  if (videoMetaSocket) {
+    videoMetaSocket.close();
+  }
+
+  videoMetaSocket = new WebSocket(wsUrl);
+
+  videoMetaSocket.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (typeof payload.capture_ts === "number") {
+        const latencyMs = Math.max(0, Math.round((Date.now() / 1000 - payload.capture_ts) * 1000));
+        updateInfoStatusText(latencyMs);
+      }
+    } catch (error) {
+      console.warn("视频延迟信息解析失败", error);
+    }
+  });
+
+  videoMetaSocket.addEventListener("close", () => {
+    updateInfoStatusText(null);
+    setTimeout(connectRobotVideoMeta, 1000);
   });
 }
 
@@ -494,11 +630,13 @@ function onXRFrame(_, frame) {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
   updateVideoTexture(gl);
+  updateInfoTexture(gl);
 
   for (const view of viewerPose.views) {
     const viewport = baseLayer.getViewport(view);
     gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
     renderVideoPanel(gl, view);
+    renderInfoPanel(gl, view);
   }
 
   const now = performance.now();
@@ -543,6 +681,7 @@ async function startXR() {
   }
 
   initVideoPanelRenderer(gl);
+  initInfoPanelRenderer(gl);
   panelPose = null;
 
   xrSession.updateRenderState({
@@ -564,3 +703,4 @@ startBtn.addEventListener("click", async () => {
 });
 
 connectRobotVideo();
+connectRobotVideoMeta();
