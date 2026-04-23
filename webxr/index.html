@@ -12,6 +12,18 @@
       background: #111;
       color: #eee;
     }
+    .page {
+      display: grid;
+      gap: 16px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .panel {
+      background: #1b1b1b;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    }
     button {
       font-size: 18px;
       padding: 12px 20px;
@@ -26,15 +38,47 @@
       word-break: break-word;
       min-height: 220px;
     }
+    .video-wrap {
+      aspect-ratio: 4 / 3;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .status {
+      font-size: 14px;
+      color: #9ecbff;
+      margin-bottom: 12px;
+    }
     canvas {
       display: none;
     }
   </style>
 </head>
 <body>
-  <h2>Quest3 WebXR 手柄调试</h2>
-  <button id="startBtn">Start XR</button>
-  <pre id="log">等待点击 Start XR ...</pre>
+  <div class="page">
+    <div class="panel">
+      <h2>Galaxy RGB</h2>
+      <div class="status" id="videoStatus">等待视频流连接...</div>
+      <div class="video-wrap">
+        <img id="robotVideo" alt="Robot RGB stream" />
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Quest3 WebXR 手柄调试</h2>
+      <button id="startBtn">Start XR</button>
+      <pre id="log">等待点击 Start XR ...</pre>
+    </div>
+  </div>
   <canvas id="xr-canvas"></canvas>
   <script type="module" src="./app.js"></script>
 </body>

@@ -1,10 +1,17 @@
 import sys
+import time
 import cv2
 import numpy as np
 import pyrealsense2 as rs
+import zmq
 
 
 CAMERA_SN = "347622072588"
+ROBOT_NAME = "galaxy"
+CAMERA_NAME = "rgb"
+SERVER_HOST = "192.168.31.46"
+ZMQ_VIDEO_PORT = 6004
+JPEG_QUALITY = 85
 
 WIDTH = 640
 HEIGHT = 480
@@ -20,14 +27,32 @@ def create_pipeline(serial_number: str):
     return pipeline
 
 
+def encode_jpeg(frame_bgr: np.ndarray):
+    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(JPEG_QUALITY)]
+    ok, buffer = cv2.imencode(".jpg", frame_bgr, encode_params)
+    if not ok:
+        raise RuntimeError("Failed to encode JPEG frame")
+    return buffer.tobytes()
+
+
 def main():
     pipeline = None
+    socket = None
+    context = zmq.Context.instance()
 
     try:
         print(f"Starting camera: {CAMERA_SN}")
         pipeline = create_pipeline(CAMERA_SN)
 
-        print("Camera started. Press 'q' to quit.")
+        endpoint = f"tcp://{SERVER_HOST}:{ZMQ_VIDEO_PORT}"
+        socket = context.socket(zmq.PUB)
+        socket.setsockopt(zmq.SNDHWM, 32)
+        socket.connect(endpoint)
+
+        # Give PUB/SUB a brief moment to establish.
+        time.sleep(0.3)
+
+        print(f"Camera started. Publishing video to {endpoint}. Press 'q' to quit.")
 
         while True:
             frames = pipeline.wait_for_frames()
@@ -50,6 +75,9 @@ def main():
                 cv2.LINE_AA,
             )
 
+            jpeg_bytes = encode_jpeg(image)
+            socket.send_multipart([f"video.{ROBOT_NAME}.{CAMERA_NAME}".encode("utf-8"), jpeg_bytes])
+
             cv2.imshow("Single RealSense Color", image)
 
             key = cv2.waitKey(1) & 0xFF
@@ -64,6 +92,8 @@ def main():
     finally:
         if pipeline is not None:
             pipeline.stop()
+        if socket is not None:
+            socket.close(0)
         cv2.destroyAllWindows()
 
 

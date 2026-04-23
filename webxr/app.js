@@ -1,6 +1,8 @@
 const startBtn = document.getElementById("startBtn");
 const logEl = document.getElementById("log");
 const canvas = document.getElementById("xr-canvas");
+const robotVideoEl = document.getElementById("robotVideo");
+const videoStatusEl = document.getElementById("videoStatus");
 
 let xrSession = null;
 let xrRefSpace = null;
@@ -8,6 +10,9 @@ let gl = null;
 let lastPrintAt = 0;
 let lastSendAt = 0;
 let sendInFlight = false;
+let videoSocket = null;
+let reconnectTimer = null;
+let currentFrameUrl = null;
 
 const handlerUrl = "/quest-data";
 
@@ -58,6 +63,51 @@ function getButtonState(buttons, index) {
 function log(message, data) {
   console.log(message, data ?? "");
   logEl.textContent = data ? `${message}\n\n${JSON.stringify(data, null, 2)}` : message;
+}
+
+function setVideoStatus(message) {
+  videoStatusEl.textContent = message;
+}
+
+function connectRobotVideo() {
+  const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+  const wsUrl = `${wsProtocol}://${location.host}/ws/video/galaxy/rgb`;
+
+  if (videoSocket) {
+    videoSocket.close();
+  }
+
+  setVideoStatus("机器人视频连接中...");
+  videoSocket = new WebSocket(wsUrl);
+  videoSocket.binaryType = "blob";
+
+  videoSocket.addEventListener("open", () => {
+    setVideoStatus("机器人视频已连接");
+  });
+
+  videoSocket.addEventListener("message", (event) => {
+    const nextUrl = URL.createObjectURL(event.data);
+    robotVideoEl.src = nextUrl;
+
+    if (currentFrameUrl) {
+      URL.revokeObjectURL(currentFrameUrl);
+    }
+
+    currentFrameUrl = nextUrl;
+    setVideoStatus(`机器人视频已连接，最近更新时间 ${new Date().toLocaleTimeString()}`);
+  });
+
+  videoSocket.addEventListener("close", () => {
+    setVideoStatus("机器人视频已断开，准备重连...");
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+    reconnectTimer = setTimeout(connectRobotVideo, 1000);
+  });
+
+  videoSocket.addEventListener("error", () => {
+    setVideoStatus("机器人视频连接失败");
+  });
 }
 
 async function sendToHandler(data) {
@@ -210,3 +260,5 @@ startBtn.addEventListener("click", async () => {
     log(`启动失败: ${error.message}`);
   }
 });
+
+connectRobotVideo();

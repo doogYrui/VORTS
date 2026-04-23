@@ -1,19 +1,34 @@
-import http.server
+from __future__ import annotations
+
+import asyncio
 import json
 import math
-import ssl
+from collections import defaultdict
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+import uvicorn
+import zmq
+import zmq.asyncio
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-PORT = 1142
+
+HTTPS_PORT = 1142
+ZMQ_CONTROL_BIND_PORT = 6003
+ZMQ_VIDEO_BIND_PORT = 6004
+
 ROOT = Path(__file__).resolve().parent
 CERT_FILE = ROOT / "localhost.pem"
 KEY_FILE = ROOT / "localhost-key.pem"
+
 QUEST_TO_ROS_BASIS = (
     (0.0, 0.0, -1.0),
     (-1.0, 0.0, 0.0),
     (0.0, 1.0, 0.0),
 )
+
 LEFT_POSITION_ZERO_OFFSET = None
 RIGHT_POSITION_ZERO_OFFSET = None
 RIGHT_INDEX4_WAS_PRESSED = False
@@ -25,7 +40,42 @@ ROTATION_ZERO_REFERENCE_EULER_DEG = {
 }
 
 
-def round_number(value, digits=4):
+class StreamBroker:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._subscribers: dict[str, set[asyncio.Queue]] = defaultdict(set)
+        self._latest: dict[str, object] = {}
+
+    def subscribe(self, key: str, maxsize: int = 1) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self._subscribers[key].add(queue)
+        if key in self._latest:
+            self._enqueue(queue, self._latest[key])
+        return queue
+
+    def unsubscribe(self, key: str, queue: asyncio.Queue) -> None:
+        subscribers = self._subscribers.get(key)
+        if not subscribers:
+            return
+        subscribers.discard(queue)
+        if not subscribers:
+            self._subscribers.pop(key, None)
+
+    def publish(self, key: str, payload: object) -> None:
+        self._latest[key] = payload
+        for queue in list(self._subscribers.get(key, set())):
+            self._enqueue(queue, payload)
+
+    def _enqueue(self, queue: asyncio.Queue, payload: object) -> None:
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        queue.put_nowait(payload)
+
+
+def round_number(value, digits: int = 4):
     return round(float(value), digits)
 
 
@@ -270,9 +320,7 @@ def sanitize_controller_state(handedness, data):
     buttons = data.get("buttons") if isinstance(data.get("buttons"), dict) else {}
     cleaned["buttons"]["index0"] = sanitize_button_state(buttons.get("index0"))
     cleaned["buttons"]["index4"] = sanitize_button_state(buttons.get("index4"))
-
     cleaned["axes"] = convert_axes(data.get("axes"))
-
     return cleaned
 
 
@@ -307,13 +355,14 @@ def apply_right_position_zero(payload):
     right = payload.get("right") or {}
     if not right.get("available"):
         RIGHT_INDEX4_WAS_PRESSED = False
+        payload["apply_to_robot"] = APPLY_TO_ROBOT
         return payload
 
     buttons = right.get("buttons") or {}
     index4 = buttons.get("index4") or {}
     is_pressed = bool(index4.get("pressed"))
     left_position = ((left.get("pose") or {}).get("position"))
-    position = ((right.get("pose") or {}).get("position"))
+    right_position = ((right.get("pose") or {}).get("position"))
 
     if is_pressed and not RIGHT_INDEX4_WAS_PRESSED:
         APPLY_TO_ROBOT = not APPLY_TO_ROBOT
@@ -325,11 +374,11 @@ def apply_right_position_zero(payload):
                 "z": left_position.get("z", 0),
             }
 
-        if position:
+        if right_position:
             RIGHT_POSITION_ZERO_OFFSET = {
-                "x": position.get("x", 0),
-                "y": position.get("y", 0),
-                "z": position.get("z", 0),
+                "x": right_position.get("x", 0),
+                "y": right_position.get("y", 0),
+                "z": right_position.get("z", 0),
             }
 
     RIGHT_INDEX4_WAS_PRESSED = is_pressed
@@ -337,11 +386,30 @@ def apply_right_position_zero(payload):
     if left_position and LEFT_POSITION_ZERO_OFFSET:
         left["pose"]["position"] = offset_position(left_position, LEFT_POSITION_ZERO_OFFSET)
 
-    if position and RIGHT_POSITION_ZERO_OFFSET:
-        right["pose"]["position"] = offset_position(position, RIGHT_POSITION_ZERO_OFFSET)
+    if right_position and RIGHT_POSITION_ZERO_OFFSET:
+        right["pose"]["position"] = offset_position(right_position, RIGHT_POSITION_ZERO_OFFSET)
 
     payload["apply_to_robot"] = APPLY_TO_ROBOT
     return payload
+
+
+def build_robot_controller_payload(controller):
+    pose = controller.get("pose") or {}
+    buttons = controller.get("buttons") or {}
+    return {
+        "pos": pose.get("position"),
+        "rot": pose.get("orientation"),
+        "index0_value": (buttons.get("index0") or {}).get("value", 0.0),
+        "axes": controller.get("axes"),
+    }
+
+
+def build_robot_payload(payload):
+    return {
+        "apply_to_robot": bool(payload.get("apply_to_robot", False)),
+        "left": build_robot_controller_payload(payload.get("left") or {}),
+        "right": build_robot_controller_payload(payload.get("right") or {}),
+    }
 
 
 def quaternion_to_euler_degrees(orientation):
@@ -398,72 +466,135 @@ def short_controller_state(name, data):
     )
 
 
-def debug_print_quest_data(payload):
+def debug_print_quest_data(payload, robot_payload):
     print("\n[quest-data] received")
     print(f"apply_to_robot: {payload.get('apply_to_robot')}")
     print(short_controller_state("left", payload.get("left")))
     print(short_controller_state("right", payload.get("right")))
-    # print(json.dumps(payload, ensure_ascii=False, indent=2))
+    print("[robot-payload]")
+    print(json.dumps(robot_payload, ensure_ascii=False, indent=2))
 
 
-def send_to_robot(payload):
-    # Placeholder for future ZMQ forwarding.
-    return payload
+async def send_to_robot(payload, socket):
+    robot_payload = build_robot_payload(payload)
+    await socket.send_json(robot_payload)
+    return robot_payload
 
 
-def handle_quest_data(payload):
+async def handle_quest_data(payload, socket):
     cleaned_payload = sanitize_payload(payload)
     cleaned_payload = apply_right_position_zero(cleaned_payload)
-    debug_print_quest_data(cleaned_payload)
-    send_to_robot(cleaned_payload)
+    robot_payload = await send_to_robot(cleaned_payload, socket)
+    # debug_print_quest_data(cleaned_payload, robot_payload)
+    return cleaned_payload
 
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
+def topic_to_video_key(topic: str) -> str | None:
+    if not topic.startswith("video."):
+        return None
 
-    def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        super().end_headers()
+    parts = topic.split(".")
+    if len(parts) < 3:
+        return None
 
-    def do_OPTIONS(self):
-        if self.path == "/quest-data":
-            self.send_response(204)
-            self.end_headers()
-            return
-        self.send_error(404, "Not Found")
-
-    def do_POST(self):
-        if self.path != "/quest-data":
-            self.send_error(404, "Not Found")
-            return
-
-        content_length = int(self.headers.get("Content-Length", "0"))
-        raw_body = self.rfile.read(content_length)
-
-        try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except json.JSONDecodeError:
-            self.send_error(400, "Invalid JSON")
-            return
-
-        handle_quest_data(payload)
-
-        response = json.dumps({"ok": True}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(response)))
-        self.end_headers()
-        self.wfile.write(response)
+    robot_name = parts[1]
+    camera_name = ".".join(parts[2:])
+    return f"{robot_name}/{camera_name}"
 
 
-httpd = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain(certfile=str(CERT_FILE), keyfile=str(KEY_FILE))
-httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+async def video_zmq_loop(app: FastAPI) -> None:
+    socket = app.state.video_sub_socket
+    broker = app.state.video_broker
 
-print(f"https server running at https://0.0.0.0:{PORT}")
-print(f"quest data endpoint: https://0.0.0.0:{PORT}/quest-data")
-httpd.serve_forever()
+    while True:
+        topic_raw, payload = await socket.recv_multipart()
+        topic = topic_raw.decode("utf-8", errors="ignore")
+        key = topic_to_video_key(topic)
+        if key:
+            broker.publish(key, payload)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    context = zmq.asyncio.Context.instance()
+
+    control_pub_socket = context.socket(zmq.PUB)
+    control_pub_socket.setsockopt(zmq.SNDHWM, 32)
+    control_pub_socket.bind(f"tcp://0.0.0.0:{ZMQ_CONTROL_BIND_PORT}")
+
+    video_sub_socket = context.socket(zmq.SUB)
+    video_sub_socket.setsockopt(zmq.RCVHWM, 32)
+    video_sub_socket.setsockopt_string(zmq.SUBSCRIBE, "video.")
+    video_sub_socket.bind(f"tcp://0.0.0.0:{ZMQ_VIDEO_BIND_PORT}")
+
+    app.state.control_pub_socket = control_pub_socket
+    app.state.video_sub_socket = video_sub_socket
+    app.state.video_broker = StreamBroker("video")
+
+    video_task = asyncio.create_task(video_zmq_loop(app), name="webxr-video-zmq")
+
+    print(f"https server running at https://0.0.0.0:{HTTPS_PORT}")
+    print(f"quest data endpoint: https://0.0.0.0:{HTTPS_PORT}/quest-data")
+    print(f"robot control publisher: tcp://0.0.0.0:{ZMQ_CONTROL_BIND_PORT}")
+    print(f"robot video subscriber: tcp://0.0.0.0:{ZMQ_VIDEO_BIND_PORT}")
+
+    try:
+        yield
+    finally:
+        video_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await video_task
+
+        video_sub_socket.close(0)
+        control_pub_socket.close(0)
+
+
+app = FastAPI(title="WebXR Quest Bridge", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.post("/quest-data")
+async def post_quest_data(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+
+    processed = await handle_quest_data(payload, app.state.control_pub_socket)
+    return {"ok": True, "apply_to_robot": processed.get("apply_to_robot")}
+
+
+@app.websocket("/ws/video/{robot_name}/{camera_name}")
+async def websocket_video(websocket: WebSocket, robot_name: str, camera_name: str):
+    await websocket.accept()
+    key = f"{robot_name}/{camera_name}"
+    queue = app.state.video_broker.subscribe(key)
+
+    try:
+        while True:
+            payload = await queue.get()
+            await websocket.send_bytes(payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        app.state.video_broker.unsubscribe(key, queue)
+
+
+app.mount("/", StaticFiles(directory=str(ROOT), html=True), name="static")
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=HTTPS_PORT,
+        ssl_certfile=str(CERT_FILE),
+        ssl_keyfile=str(KEY_FILE),
+        reload=False,
+    )
