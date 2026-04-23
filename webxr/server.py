@@ -14,6 +14,15 @@ QUEST_TO_ROS_BASIS = (
     (-1.0, 0.0, 0.0),
     (0.0, 1.0, 0.0),
 )
+LEFT_POSITION_ZERO_OFFSET = None
+RIGHT_POSITION_ZERO_OFFSET = None
+RIGHT_INDEX4_WAS_PRESSED = False
+APPLY_TO_ROBOT = False
+ROTATION_ZERO_REFERENCE_EULER_DEG = {
+    "roll": 0.0,
+    "pitch": -35.0,
+    "yaw": 0.0,
+}
 
 
 def round_number(value, digits=4):
@@ -50,6 +59,16 @@ def sanitize_button_state(button_data):
     return {
         "pressed": bool(button_data.get("pressed", False)),
         "value": float(button_data.get("value", 0) or 0),
+    }
+
+
+def convert_axes(axes):
+    axes = axes if isinstance(axes, dict) else {}
+    raw_axis2 = float(axes.get("axis2", 0) or 0)
+    raw_axis3 = float(axes.get("axis3", 0) or 0)
+    return {
+        "axis2": round_number(-raw_axis3),
+        "axis3": round_number(-raw_axis2),
     }
 
 
@@ -140,6 +159,76 @@ def matrix_to_quaternion(matrix):
     }
 
 
+def normalize_quaternion(quaternion):
+    x = float(quaternion.get("x", 0) or 0)
+    y = float(quaternion.get("y", 0) or 0)
+    z = float(quaternion.get("z", 0) or 0)
+    w = float(quaternion.get("w", 1) or 1)
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+
+    if norm == 0:
+        return {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+
+    return {
+        "x": round_number(x / norm),
+        "y": round_number(y / norm),
+        "z": round_number(z / norm),
+        "w": round_number(w / norm),
+    }
+
+
+def quaternion_multiply(a, b):
+    ax = float(a.get("x", 0) or 0)
+    ay = float(a.get("y", 0) or 0)
+    az = float(a.get("z", 0) or 0)
+    aw = float(a.get("w", 1) or 1)
+
+    bx = float(b.get("x", 0) or 0)
+    by = float(b.get("y", 0) or 0)
+    bz = float(b.get("z", 0) or 0)
+    bw = float(b.get("w", 1) or 1)
+
+    return normalize_quaternion(
+        {
+            "x": aw * bx + ax * bw + ay * bz - az * by,
+            "y": aw * by - ax * bz + ay * bw + az * bx,
+            "z": aw * bz + ax * by - ay * bx + az * bw,
+            "w": aw * bw - ax * bx - ay * by - az * bz,
+        }
+    )
+
+
+def quaternion_conjugate(quaternion):
+    return {
+        "x": round_number(-(quaternion.get("x", 0) or 0)),
+        "y": round_number(-(quaternion.get("y", 0) or 0)),
+        "z": round_number(-(quaternion.get("z", 0) or 0)),
+        "w": round_number(quaternion.get("w", 1) or 1),
+    }
+
+
+def euler_degrees_to_quaternion(roll, pitch, yaw):
+    roll_rad = math.radians(roll)
+    pitch_rad = math.radians(pitch)
+    yaw_rad = math.radians(yaw)
+
+    cr = math.cos(roll_rad / 2)
+    sr = math.sin(roll_rad / 2)
+    cp = math.cos(pitch_rad / 2)
+    sp = math.sin(pitch_rad / 2)
+    cy = math.cos(yaw_rad / 2)
+    sy = math.sin(yaw_rad / 2)
+
+    return normalize_quaternion(
+        {
+            "x": sr * cp * cy - cr * sp * sy,
+            "y": cr * sp * cy + sr * cp * sy,
+            "z": cr * cp * sy - sr * sp * cy,
+            "w": cr * cp * cy + sr * sp * sy,
+        }
+    )
+
+
 def convert_orientation_to_ros(orientation):
     quest_rotation = quaternion_to_matrix(orientation)
     ros_basis_t = transpose_matrix(QUEST_TO_ROS_BASIS)
@@ -148,6 +237,16 @@ def convert_orientation_to_ros(orientation):
         ros_basis_t,
     )
     return matrix_to_quaternion(ros_rotation)
+
+
+def apply_rotation_zero_reference(orientation):
+    reference = euler_degrees_to_quaternion(
+        ROTATION_ZERO_REFERENCE_EULER_DEG["roll"],
+        ROTATION_ZERO_REFERENCE_EULER_DEG["pitch"],
+        ROTATION_ZERO_REFERENCE_EULER_DEG["yaw"],
+    )
+    reference_inverse = quaternion_conjugate(reference)
+    return quaternion_multiply(reference_inverse, orientation)
 
 
 def sanitize_controller_state(handedness, data):
@@ -165,17 +264,14 @@ def sanitize_controller_state(handedness, data):
         cleaned["pose"]["position"] = convert_position_to_ros(position)
 
     if orientation:
-        cleaned["pose"]["orientation"] = convert_orientation_to_ros(orientation)
+        ros_orientation = convert_orientation_to_ros(orientation)
+        cleaned["pose"]["orientation"] = apply_rotation_zero_reference(ros_orientation)
 
     buttons = data.get("buttons") if isinstance(data.get("buttons"), dict) else {}
     cleaned["buttons"]["index0"] = sanitize_button_state(buttons.get("index0"))
     cleaned["buttons"]["index4"] = sanitize_button_state(buttons.get("index4"))
 
-    axes = data.get("axes") if isinstance(data.get("axes"), dict) else {}
-    cleaned["axes"] = {
-        "axis2": float(axes.get("axis2", 0) or 0),
-        "axis3": float(axes.get("axis3", 0) or 0),
-    }
+    cleaned["axes"] = convert_axes(data.get("axes"))
 
     return cleaned
 
@@ -184,9 +280,68 @@ def sanitize_payload(payload):
     payload = payload if isinstance(payload, dict) else {}
     return {
         "ts": payload.get("ts"),
+        "apply_to_robot": APPLY_TO_ROBOT,
         "left": sanitize_controller_state("left", payload.get("left")),
         "right": sanitize_controller_state("right", payload.get("right")),
     }
+
+
+def offset_position(position, offset):
+    if not position or not offset:
+        return position
+
+    return {
+        "x": round_number(position.get("x", 0) - offset.get("x", 0)),
+        "y": round_number(position.get("y", 0) - offset.get("y", 0)),
+        "z": round_number(position.get("z", 0) - offset.get("z", 0)),
+    }
+
+
+def apply_right_position_zero(payload):
+    global LEFT_POSITION_ZERO_OFFSET
+    global RIGHT_POSITION_ZERO_OFFSET
+    global RIGHT_INDEX4_WAS_PRESSED
+    global APPLY_TO_ROBOT
+
+    left = payload.get("left") or {}
+    right = payload.get("right") or {}
+    if not right.get("available"):
+        RIGHT_INDEX4_WAS_PRESSED = False
+        return payload
+
+    buttons = right.get("buttons") or {}
+    index4 = buttons.get("index4") or {}
+    is_pressed = bool(index4.get("pressed"))
+    left_position = ((left.get("pose") or {}).get("position"))
+    position = ((right.get("pose") or {}).get("position"))
+
+    if is_pressed and not RIGHT_INDEX4_WAS_PRESSED:
+        APPLY_TO_ROBOT = not APPLY_TO_ROBOT
+
+        if left.get("available") and left_position:
+            LEFT_POSITION_ZERO_OFFSET = {
+                "x": left_position.get("x", 0),
+                "y": left_position.get("y", 0),
+                "z": left_position.get("z", 0),
+            }
+
+        if position:
+            RIGHT_POSITION_ZERO_OFFSET = {
+                "x": position.get("x", 0),
+                "y": position.get("y", 0),
+                "z": position.get("z", 0),
+            }
+
+    RIGHT_INDEX4_WAS_PRESSED = is_pressed
+
+    if left_position and LEFT_POSITION_ZERO_OFFSET:
+        left["pose"]["position"] = offset_position(left_position, LEFT_POSITION_ZERO_OFFSET)
+
+    if position and RIGHT_POSITION_ZERO_OFFSET:
+        right["pose"]["position"] = offset_position(position, RIGHT_POSITION_ZERO_OFFSET)
+
+    payload["apply_to_robot"] = APPLY_TO_ROBOT
+    return payload
 
 
 def quaternion_to_euler_degrees(orientation):
@@ -245,6 +400,7 @@ def short_controller_state(name, data):
 
 def debug_print_quest_data(payload):
     print("\n[quest-data] received")
+    print(f"apply_to_robot: {payload.get('apply_to_robot')}")
     print(short_controller_state("left", payload.get("left")))
     print(short_controller_state("right", payload.get("right")))
     # print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -257,6 +413,7 @@ def send_to_robot(payload):
 
 def handle_quest_data(payload):
     cleaned_payload = sanitize_payload(payload)
+    cleaned_payload = apply_right_position_zero(cleaned_payload)
     debug_print_quest_data(cleaned_payload)
     send_to_robot(cleaned_payload)
 
