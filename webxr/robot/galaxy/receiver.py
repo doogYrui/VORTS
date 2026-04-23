@@ -11,6 +11,8 @@ from typing import Optional
 import zmq
 import rospy
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import TwistStamped
+from std_msgs.msg import Float32
 
 
 def _env(name: str, default: str) -> str:
@@ -35,6 +37,9 @@ class ReceiverConfig:
     poll_timeout_ms: int = _env_int("WEBXR_POLL_TIMEOUT_MS", 200)
     left_topic: str = _env("GALAXY_LEFT_ARM_TOPIC", "/motion_target/target_pose_arm_left")
     right_topic: str = _env("GALAXY_RIGHT_ARM_TOPIC", "/motion_target/target_pose_arm_right")
+    chassis_topic: str = _env("GALAXY_CHASSIS_TOPIC", "/motion_target/target_speed_chassis")
+    left_gripper_topic: str = _env("GALAXY_LEFT_GRIPPER_TOPIC", "/motion_control/position_control_gripper_left")
+    right_gripper_topic: str = _env("GALAXY_RIGHT_GRIPPER_TOPIC", "/motion_control/position_control_gripper_right")
 
     def resolve_control_endpoint(self) -> str:
         return f"tcp://{self.server_host}:{self.control_port}"
@@ -136,8 +141,8 @@ def add_base_transform(base: dict, pose: dict) -> dict:
     }
 
     target_orientation = quaternion_multiply(
-        base["orientation"],
         pose.get("rot") or {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        base["orientation"],
     )
 
     return {
@@ -157,6 +162,31 @@ def base_pose_only(base: dict) -> dict:
     }
 
 
+def gripper_value_from_index0(index0_value) -> float:
+    raw_value = float(index0_value or 0.0)
+    return round_number((1.0 - raw_value) * 100.0, 2)
+
+
+def build_chassis_command(left: dict, right: dict, apply_to_robot: bool) -> TwistStamped:
+    left_axes = left.get("axes") or {}
+    right_axes = right.get("axes") or {}
+
+    linear_x = float(left_axes.get("axis2", 0.0) or 0.0) * 0.2
+    linear_y = float(left_axes.get("axis3", 0.0) or 0.0) * 0.2
+    angular_z = float(right_axes.get("axis3", 0.0) or 0.0) * 0.5
+
+    msg = TwistStamped()
+    msg.header.stamp = rospy.Time.now()
+    msg.header.frame_id = "base_link"
+    msg.twist.linear.x = round_number(linear_x)
+    msg.twist.linear.y = round_number(linear_y)
+    msg.twist.linear.z = 0.0
+    msg.twist.angular.x = 0.0
+    msg.twist.angular.y = 0.0
+    msg.twist.angular.z = round_number(angular_z)
+    return msg
+
+
 class GalaxyArmReceiver:
     def __init__(self, config: Optional[ReceiverConfig] = None, logger: Optional[logging.Logger] = None) -> None:
         self.config = config or ReceiverConfig()
@@ -164,7 +194,11 @@ class GalaxyArmReceiver:
         self._context = zmq.Context.instance()
         self._socket: Optional[zmq.Socket] = None
         self._running = False
+        self._left_publisher = rospy.Publisher(self.config.left_topic, PoseStamped, queue_size=10)
         self._right_publisher = rospy.Publisher(self.config.right_topic, PoseStamped, queue_size=10)
+        self._chassis_publisher = rospy.Publisher(self.config.chassis_topic, TwistStamped, queue_size=10)
+        self._left_gripper_publisher = rospy.Publisher(self.config.left_gripper_topic, Float32, queue_size=10)
+        self._right_gripper_publisher = rospy.Publisher(self.config.right_gripper_topic, Float32, queue_size=10)
 
     @staticmethod
     def _build_logger() -> logging.Logger:
@@ -190,6 +224,9 @@ class GalaxyArmReceiver:
         self.logger.info("Receiver connected to %s", self.config.resolve_control_endpoint())
         self.logger.info("ROS left topic: %s", self.config.left_topic)
         self.logger.info("ROS right topic: %s", self.config.right_topic)
+        self.logger.info("ROS chassis topic: %s", self.config.chassis_topic)
+        self.logger.info("ROS left gripper topic: %s", self.config.left_gripper_topic)
+        self.logger.info("ROS right gripper topic: %s", self.config.right_gripper_topic)
 
     def stop(self) -> None:
         self._running = False
@@ -228,6 +265,14 @@ class GalaxyArmReceiver:
         self._debug_print_arm("right", right)
         self.logger.info("apply_to_robot=%s", apply_to_robot)
 
+        left_gripper_msg = Float32(data=gripper_value_from_index0(left.get("index0_value", 0.0)))
+        right_gripper_msg = Float32(data=gripper_value_from_index0(right.get("index0_value", 0.0)))
+        self._left_gripper_publisher.publish(left_gripper_msg)
+        self._right_gripper_publisher.publish(right_gripper_msg)
+
+        chassis_msg = build_chassis_command(left, right, apply_to_robot)
+        self._chassis_publisher.publish(chassis_msg)
+
         if apply_to_robot:
             left_target = add_base_transform(LEFT_ARM_BASE, left)
             right_target = add_base_transform(RIGHT_ARM_BASE, right)
@@ -235,17 +280,42 @@ class GalaxyArmReceiver:
             left_target = base_pose_only(LEFT_ARM_BASE)
             right_target = base_pose_only(RIGHT_ARM_BASE)
 
-        # Real ROS publishing is intentionally disabled for now.
-        # left_msg = self._build_pose_stamped(left_target)
+        left_msg = self._build_pose_stamped(left_target)
         right_msg = self._build_pose_stamped(right_target)
-        # self._left_publisher.publish(left_msg)
+        self._left_publisher.publish(left_msg)
         self._right_publisher.publish(right_msg)
 
+        left_target_euler = quaternion_to_euler_degrees(left_target["orientation"])
+        right_target_euler = quaternion_to_euler_degrees(right_target["orientation"])
         self.logger.info(
-            "ros_target_mode=%s left_target=%s right_target=%s",
+            "ros_target_mode=%s left_target_pos=(%s, %s, %s) left_target_euler=(%s, %s, %s) right_target_pos=(%s, %s, %s) right_target_euler=(%s, %s, %s)",
             "teleop" if apply_to_robot else "base",
-            json.dumps(left_target, ensure_ascii=False),
-            json.dumps(right_target, ensure_ascii=False),
+            left_target["position"]["x"],
+            left_target["position"]["y"],
+            left_target["position"]["z"],
+            left_target_euler["roll"],
+            left_target_euler["pitch"],
+            left_target_euler["yaw"],
+            right_target["position"]["x"],
+            right_target["position"]["y"],
+            right_target["position"]["z"],
+            right_target_euler["roll"],
+            right_target_euler["pitch"],
+            right_target_euler["yaw"],
+        )
+        self.logger.info(
+            "gripper_target left=%s right=%s",
+            left_gripper_msg.data,
+            right_gripper_msg.data,
+        )
+        self.logger.info(
+            "chassis_target linear=(%s, %s, %s) angular=(%s, %s, %s)",
+            chassis_msg.twist.linear.x,
+            chassis_msg.twist.linear.y,
+            chassis_msg.twist.linear.z,
+            chassis_msg.twist.angular.x,
+            chassis_msg.twist.angular.y,
+            chassis_msg.twist.angular.z,
         )
 
     def _debug_print_arm(self, name: str, arm_data: dict) -> None:

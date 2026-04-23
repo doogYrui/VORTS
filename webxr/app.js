@@ -39,6 +39,8 @@ function makeEmptyControllerState(handedness) {
       }
     },
     axes: {
+      axis0: 0,
+      axis1: 0,
       axis2: 0,
       axis3: 0
     }
@@ -180,6 +182,8 @@ function buildControllerState(frame, session, refSpace) {
     };
 
     controllerData.axes = {
+      axis0: formatNumber(gamepad.axes[0] ?? 0),
+      axis1: formatNumber(gamepad.axes[1] ?? 0),
       axis2: formatNumber(gamepad.axes[2] ?? 0),
       axis3: formatNumber(gamepad.axes[3] ?? 0)
     };

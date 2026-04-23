@@ -98,6 +98,8 @@ def make_empty_controller_state(handedness):
             },
         },
         "axes": {
+            "axis0": 0,
+            "axis1": 0,
             "axis2": 0,
             "axis3": 0,
         },
@@ -114,9 +116,13 @@ def sanitize_button_state(button_data):
 
 def convert_axes(axes):
     axes = axes if isinstance(axes, dict) else {}
+    raw_axis0 = float(axes.get("axis0", 0) or 0)
+    raw_axis1 = float(axes.get("axis1", 0) or 0)
     raw_axis2 = float(axes.get("axis2", 0) or 0)
     raw_axis3 = float(axes.get("axis3", 0) or 0)
     return {
+        "axis0": round_number(raw_axis0),
+        "axis1": round_number(raw_axis1),
         "axis2": round_number(-raw_axis3),
         "axis3": round_number(-raw_axis2),
     }
