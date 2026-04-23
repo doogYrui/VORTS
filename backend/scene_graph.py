@@ -4,10 +4,11 @@ import math
 import time
 
 from .models import SceneEdge, SceneGraphMessage, SceneNode
+from .robot_registry import canonical_robot_name
 
 
 DEFAULT_POSES: dict[str, list[float]] = {
-    "galaxy": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    "galaxea": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
     "ysc": [2.4, 0.4, 0.0, 0.0, 0.0, 0.0, 1.0],
     "piper": [-1.7, -0.6, 0.0, 0.0, 0.0, 0.0, 1.0],
 }
@@ -26,10 +27,13 @@ def _distance_xy(source_pose: list[float], target_pose: list[float]) -> float:
 class SceneGraphGenerator:
     def build(self, runtime_robot_poses: dict[str, list[float]]) -> SceneGraphMessage:
         nodes: list[SceneNode] = []
+        normalized_runtime_poses = {
+            canonical_robot_name(robot_name): pose for robot_name, pose in runtime_robot_poses.items()
+        }
 
         robot_nodes = []
         for robot_name, default_pose in DEFAULT_POSES.items():
-            pose = runtime_robot_poses.get(robot_name, default_pose)
+            pose = normalized_runtime_poses.get(robot_name, default_pose)
             node = SceneNode(id=robot_name, type="robot", label=robot_name, pose=pose)
             nodes.append(node)
             robot_nodes.append(node)

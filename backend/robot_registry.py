@@ -4,11 +4,16 @@ from .models import RobotCapability, RobotInfo, SourceItem
 
 
 TELEOP_KEYS = ["w", "s", "a", "d", "q", "e"]
+ROBOT_ALIASES: dict[str, str] = {}
+
+
+def canonical_robot_name(name: str) -> str:
+    return ROBOT_ALIASES.get(name, name)
 
 
 _CAPABILITIES = [
     RobotCapability(
-        name="galaxy",
+        name="galaxea",
         type="mobile_dual_arm",
         ip="127.0.0.1",
         teleop=True,

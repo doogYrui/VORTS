@@ -38,6 +38,7 @@ class Settings:
     zmq_command_bind: str = os.getenv("ZMQ_COMMAND_BIND", "tcp://0.0.0.0:6002")
     history_seconds: int = _env_int("NETWORK_HISTORY_SECONDS", 60)
     scene_graph_hz: float = _env_float("SCENE_GRAPH_HZ", 2.0)
+    lite3_pointcloud_robot: str = os.getenv("LITE3_POINTCLOUD_ROBOT", "ysc")
     logs_dir: Path = ROOT_DIR / "backend" / "logs"
     mock_logs_dir: Path = ROOT_DIR / "mock_robots" / "logs"
 
