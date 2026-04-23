@@ -9,6 +9,15 @@ PORT = 1142
 ROOT = Path(__file__).resolve().parent
 CERT_FILE = ROOT / "localhost.pem"
 KEY_FILE = ROOT / "localhost-key.pem"
+QUEST_TO_ROS_BASIS = (
+    (0.0, 0.0, -1.0),
+    (-1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+)
+
+
+def round_number(value, digits=4):
+    return round(float(value), digits)
 
 
 def make_empty_controller_state(handedness):
@@ -44,6 +53,103 @@ def sanitize_button_state(button_data):
     }
 
 
+def convert_position_to_ros(position):
+    return {
+        "x": round_number(-(position.get("z", 0) or 0)),
+        "y": round_number(-(position.get("x", 0) or 0)),
+        "z": round_number(position.get("y", 0) or 0),
+    }
+
+
+def quaternion_to_matrix(orientation):
+    x = float(orientation.get("x", 0) or 0)
+    y = float(orientation.get("y", 0) or 0)
+    z = float(orientation.get("z", 0) or 0)
+    w = float(orientation.get("w", 1) or 1)
+
+    return (
+        (
+            1 - 2 * (y * y + z * z),
+            2 * (x * y - z * w),
+            2 * (x * z + y * w),
+        ),
+        (
+            2 * (x * y + z * w),
+            1 - 2 * (x * x + z * z),
+            2 * (y * z - x * w),
+        ),
+        (
+            2 * (x * z - y * w),
+            2 * (y * z + x * w),
+            1 - 2 * (x * x + y * y),
+        ),
+    )
+
+
+def transpose_matrix(matrix):
+    return tuple(tuple(matrix[j][i] for j in range(3)) for i in range(3))
+
+
+def multiply_matrix(a, b):
+    return tuple(
+        tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+        for i in range(3)
+    )
+
+
+def matrix_to_quaternion(matrix):
+    m00, m01, m02 = matrix[0]
+    m10, m11, m12 = matrix[1]
+    m20, m21, m22 = matrix[2]
+    trace = m00 + m11 + m22
+
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2
+        w = 0.25 * s
+        x = (m21 - m12) / s
+        y = (m02 - m20) / s
+        z = (m10 - m01) / s
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2
+        w = (m21 - m12) / s
+        x = 0.25 * s
+        y = (m01 + m10) / s
+        z = (m02 + m20) / s
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2
+        w = (m02 - m20) / s
+        x = (m01 + m10) / s
+        y = 0.25 * s
+        z = (m12 + m21) / s
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2
+        w = (m10 - m01) / s
+        x = (m02 + m20) / s
+        y = (m12 + m21) / s
+        z = 0.25 * s
+
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+    if norm == 0:
+        return {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+
+    return {
+        "x": round_number(x / norm),
+        "y": round_number(y / norm),
+        "z": round_number(z / norm),
+        "w": round_number(w / norm),
+    }
+
+
+def convert_orientation_to_ros(orientation):
+    quest_rotation = quaternion_to_matrix(orientation)
+    ros_basis_t = transpose_matrix(QUEST_TO_ROS_BASIS)
+    ros_rotation = multiply_matrix(
+        multiply_matrix(QUEST_TO_ROS_BASIS, quest_rotation),
+        ros_basis_t,
+    )
+    return matrix_to_quaternion(ros_rotation)
+
+
 def sanitize_controller_state(handedness, data):
     cleaned = make_empty_controller_state(handedness)
     if not isinstance(data, dict):
@@ -56,19 +162,10 @@ def sanitize_controller_state(handedness, data):
     orientation = pose.get("orientation") if isinstance(pose.get("orientation"), dict) else None
 
     if position:
-        cleaned["pose"]["position"] = {
-            "x": position.get("x"),
-            "y": position.get("y"),
-            "z": position.get("z"),
-        }
+        cleaned["pose"]["position"] = convert_position_to_ros(position)
 
     if orientation:
-        cleaned["pose"]["orientation"] = {
-            "x": orientation.get("x"),
-            "y": orientation.get("y"),
-            "z": orientation.get("z"),
-            "w": orientation.get("w"),
-        }
+        cleaned["pose"]["orientation"] = convert_orientation_to_ros(orientation)
 
     buttons = data.get("buttons") if isinstance(data.get("buttons"), dict) else {}
     cleaned["buttons"]["index0"] = sanitize_button_state(buttons.get("index0"))
