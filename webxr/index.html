@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quest3 WebXR Controller Test</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+    }
+    button {
+      font-size: 18px;
+      padding: 12px 20px;
+      cursor: pointer;
+    }
+    pre {
+      margin-top: 16px;
+      background: #1e1e1e;
+      padding: 12px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 220px;
+    }
+    canvas {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h2>Quest3 WebXR 手柄调试</h2>
+  <button id="startBtn">Start XR</button>
+  <pre id="log">等待点击 Start XR ...</pre>
+  <canvas id="xr-canvas"></canvas>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
