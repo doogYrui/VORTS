@@ -82,7 +82,7 @@ python3 robot/galaxy/galaxy_command_receiver.py
 启动 WebXR 前，先在监控上位机 `192.168.31.220` 上启动监控相机发布器：
 
 ```bash
-ssh nvidia@192.168.31.220
+ssh sonic@192.168.31.220
 cd ~/doogYrui/VORTS
 export VORTS_BACKEND_HOST=192.168.31.46
 python3 -m robot.monitor.monitor_camera_publisher
@@ -91,7 +91,7 @@ python3 -m robot.monitor.monitor_camera_publisher
 然后在 server `192.168.31.46` 上进入 `webxr/` 目录启动 WebXR 服务：
 
 ```bash
-cd ~/doogYrui/VORTS/webxr
+cd webxr
 python3 server.py
 ```
 
