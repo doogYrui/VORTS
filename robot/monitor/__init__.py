@@ -1,0 +1,1 @@
+"""Monitor camera publisher package."""

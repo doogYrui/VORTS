@@ -42,6 +42,16 @@ _CAPABILITIES = [
         lidar=False,
         odom=False,
     ),
+    RobotCapability(
+        name="monitor",
+        type="fixed_camera",
+        ip="192.168.31.220",
+        teleop=False,
+        teleop_keys=[],
+        cameras=["main"],
+        lidar=False,
+        odom=False,
+    ),
 ]
 
 

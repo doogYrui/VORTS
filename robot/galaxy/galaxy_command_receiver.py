@@ -30,8 +30,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass
 class CommandReceiverConfig:
-    robot_name: str = _env("GALAXY_ROBOT_NAME", "galaxy")
-    backend_host: str = _env("VORTS_BACKEND_HOST", _env("BACKEND_HOST", "192.168.31.32"))
+    robot_name: str = _env("GALAXY_ROBOT_NAME", "galaxea")
+    backend_host: str = _env("VORTS_BACKEND_HOST", _env("BACKEND_HOST", "192.168.31.46"))
     command_endpoint: str = _env("VORTS_COMMAND_ENDPOINT", "")
     command_port: int = _env_int("VORTS_COMMAND_PORT", 6002)
     chassis_topic: str = _env("GALAXY_CHASSIS_TOPIC", "/motion_target/target_speed_chassis")

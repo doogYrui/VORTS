@@ -90,7 +90,9 @@ export class MonitorPage {
     const firstVideoValue = this.videoSources[0]
       ? `${this.videoSources[0].robot}/${this.videoSources[0].source}`
       : "";
-    const defaultGlobalSource = this.videoSources.find((item) => item.robot === "piper" && item.source === "arm_full");
+    const defaultGlobalSource =
+      this.videoSources.find((item) => item.robot === "monitor" && item.source === "main") ||
+      this.videoSources.find((item) => item.robot === "piper" && item.source === "arm_full");
     const defaultGlobalValue = defaultGlobalSource
       ? `${defaultGlobalSource.robot}/${defaultGlobalSource.source}`
       : firstVideoValue;

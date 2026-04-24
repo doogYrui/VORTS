@@ -35,20 +35,21 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass
 class GalaxyBridgeConfig:
-    robot_name: str = "galaxy"
-    backend_host: str = _env("VORTS_BACKEND_HOST", _env("BACKEND_HOST", "192.168.31.32"))
+    robot_name: str = "galaxea"
+    backend_host: str = _env("VORTS_BACKEND_HOST", _env("BACKEND_HOST", "192.168.31.46"))
     sensor_endpoint: str = _env("VORTS_SENSOR_ENDPOINT", "")
     command_endpoint: str = _env("VORTS_COMMAND_ENDPOINT", "")
     sensor_port: int = _env_int("VORTS_SENSOR_PORT", 6001)
     command_port: int = _env_int("VORTS_COMMAND_PORT", 6002)
     left_serial: str = _env("GALAXY_LEFT_SN", "333422301212")
     right_serial: str = _env("GALAXY_RIGHT_SN", "346522071650")
-    main_mode: str = _env("GALAXY_MAIN_MODE", "stitch")
+    main_serial: str = _env("GALAXY_MAIN_SN", "347622072588")
     pointcloud_topic: str = _env("GALAXY_POINTCLOUD_TOPIC", "/livox/lidar")
     odom_topic: str = _env("GALAXY_ODOM_TOPIC", "/local_odom")
     video_width: int = _env_int("GALAXY_VIDEO_WIDTH", 640)
     video_height: int = _env_int("GALAXY_VIDEO_HEIGHT", 480)
     video_fps: int = _env_int("GALAXY_VIDEO_FPS", 15)
+    video_wait_timeout_ms: int = _env_int("GALAXY_VIDEO_WAIT_TIMEOUT_MS", 120)
     pointcloud_hz: float = float(_env("GALAXY_POINTCLOUD_HZ", "10.0"))
     odom_hz: float = float(_env("GALAXY_ODOM_HZ", "10.0"))
     max_points: int = _env_int("GALAXY_MAX_POINTS", 50000)
@@ -235,10 +236,17 @@ class RealSenseDualCameraPublisher:
         self._thread: Optional[threading.Thread] = None
         self._left_pipeline: Optional[rs.pipeline] = None
         self._right_pipeline: Optional[rs.pipeline] = None
+        self._main_pipeline: Optional[rs.pipeline] = None
+        self._placeholders = {
+            "left_arm": self._build_placeholder_frame("left_arm", self.config.left_serial),
+            "right_arm": self._build_placeholder_frame("right_arm", self.config.right_serial),
+            "main": self._build_placeholder_frame("main", self.config.main_serial),
+        }
 
     def start(self) -> None:
         self._left_pipeline = self._create_pipeline(self.config.left_serial)
         self._right_pipeline = self._create_pipeline(self.config.right_serial)
+        self._main_pipeline = self._create_pipeline(self.config.main_serial)
         self._thread = threading.Thread(target=self._run, name="galaxy-rgb", daemon=True)
         self._thread.start()
         self.logger.info("RGB publisher started")
@@ -249,26 +257,84 @@ class RealSenseDualCameraPublisher:
             self._thread.join(timeout=2.0)
         self._stop_pipeline(self._left_pipeline)
         self._stop_pipeline(self._right_pipeline)
+        self._stop_pipeline(self._main_pipeline)
         self._left_pipeline = None
         self._right_pipeline = None
+        self._main_pipeline = None
 
     def _create_pipeline(self, serial_number: str) -> Optional[rs.pipeline]:
         if not serial_number:
             self.logger.warning("Camera serial number is empty, camera will be skipped")
             return None
 
-        pipeline = rs.pipeline()
-        config = rs.config()
-        config.enable_device(serial_number)
-        config.enable_stream(
-            rs.stream.color,
-            self.config.video_width,
-            self.config.video_height,
-            rs.format.bgr8,
-            self.config.video_fps,
+        if not self._camera_online(serial_number):
+            self.logger.warning("RealSense camera offline, using placeholder: serial=%s", serial_number)
+            return None
+
+        try:
+            pipeline = rs.pipeline()
+            config = rs.config()
+            config.enable_device(serial_number)
+            config.enable_stream(
+                rs.stream.color,
+                self.config.video_width,
+                self.config.video_height,
+                rs.format.bgr8,
+                self.config.video_fps,
+            )
+            pipeline.start(config)
+            self.logger.info("RealSense camera started: serial=%s", serial_number)
+            return pipeline
+        except Exception as exc:
+            self.logger.warning("Failed to start RealSense camera serial=%s: %s", serial_number, exc)
+            return None
+
+    @staticmethod
+    def _camera_online(serial_number: str) -> bool:
+        try:
+            context = rs.context()
+            for device in context.query_devices():
+                if device.get_info(rs.camera_info.serial_number) == serial_number:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def _build_placeholder_frame(self, camera_name: str, serial_number: str) -> np.ndarray:
+        frame = np.zeros((self.config.video_height, self.config.video_width, 3), dtype=np.uint8)
+        frame[:, :] = (38, 44, 50)
+        cv2.rectangle(frame, (24, 24), (self.config.video_width - 24, self.config.video_height - 24), (90, 110, 124), 2)
+        cv2.putText(
+            frame,
+            f"galaxy / {camera_name}",
+            (48, 96),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (220, 230, 235),
+            2,
+            cv2.LINE_AA,
         )
-        pipeline.start(config)
-        return pipeline
+        cv2.putText(
+            frame,
+            "camera offline",
+            (48, 148),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (170, 188, 198),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            f"serial: {serial_number or 'unset'}",
+            (48, 198),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (145, 165, 176),
+            2,
+            cv2.LINE_AA,
+        )
+        return frame
 
     @staticmethod
     def _stop_pipeline(pipeline: Optional[rs.pipeline]) -> None:
@@ -278,13 +344,15 @@ class RealSenseDualCameraPublisher:
             except Exception:
                 pass
 
-    @staticmethod
-    def _frame_from_pipeline(pipeline: Optional[rs.pipeline]) -> Optional[np.ndarray]:
+    def _frame_from_pipeline(self, pipeline: Optional[rs.pipeline]) -> Optional[np.ndarray]:
         if pipeline is None:
             return None
 
-        frames = pipeline.wait_for_frames()
-        color_frame = frames.get_color_frame()
+        try:
+            frames = pipeline.wait_for_frames(self.config.video_wait_timeout_ms)
+            color_frame = frames.get_color_frame()
+        except Exception:
+            return None
         if not color_frame:
             return None
         return np.asanyarray(color_frame.get_data())
@@ -301,42 +369,26 @@ class RealSenseDualCameraPublisher:
 
             left_img = None
             right_img = None
+            main_img = None
 
-            try:
-                left_img = self._frame_from_pipeline(self._left_pipeline)
-                right_img = self._frame_from_pipeline(self._right_pipeline)
-            except Exception as exc:
-                self.logger.warning("Failed to read RGB frame: %s", exc)
+            left_img = self._frame_from_pipeline(self._left_pipeline)
+            right_img = self._frame_from_pipeline(self._right_pipeline)
+            main_img = self._frame_from_pipeline(self._main_pipeline)
 
             if left_img is not None:
                 self.bridge.publish_video("left_arm", left_img)
+            else:
+                self.bridge.publish_video("left_arm", self._placeholders["left_arm"])
             if right_img is not None:
                 self.bridge.publish_video("right_arm", right_img)
-
-            main_frame = self._build_main_frame(left_img, right_img)
-            if main_frame is not None:
-                self.bridge.publish_video("main", main_frame)
+            else:
+                self.bridge.publish_video("right_arm", self._placeholders["right_arm"])
+            if main_img is not None:
+                self.bridge.publish_video("main", main_img)
+            else:
+                self.bridge.publish_video("main", self._placeholders["main"])
 
             next_tick += period
-
-    def _build_main_frame(self, left_img: Optional[np.ndarray], right_img: Optional[np.ndarray]) -> Optional[np.ndarray]:
-        mode = (self.config.main_mode or "stitch").lower()
-        if left_img is None and right_img is None:
-            return None
-        if mode == "left":
-            return left_img if left_img is not None else right_img
-        if mode == "right":
-            return right_img if right_img is not None else left_img
-        if left_img is None:
-            return right_img
-        if right_img is None:
-            return left_img
-
-        target_height = min(left_img.shape[0], right_img.shape[0], self.config.video_height)
-        target_width = max(int(self.config.video_width / 2), 1)
-        left_small = cv2.resize(left_img, (target_width, target_height))
-        right_small = cv2.resize(right_img, (target_width, target_height))
-        return np.hstack((left_small, right_small))
 
 
 class GalaxyPointCloudPublisher:
@@ -345,14 +397,33 @@ class GalaxyPointCloudPublisher:
         self.bridge = bridge
         self.logger = logger or bridge.logger
         self._last_output_time = 0.0
+        self._last_warning_time = 0.0
         self._min_interval = 1.0 / max(float(self.config.pointcloud_hz), 0.1)
-        self._subscriber = rospy.Subscriber(
-            self.config.pointcloud_topic,
-            PointCloud2,
-            self._callback,
-            queue_size=1,
-            buff_size=2 ** 24,
-        )
+        self._subscriber: Optional[rospy.Subscriber] = None
+
+        if not self.config.pointcloud_topic:
+            self.logger.warning("Pointcloud topic is empty, pointcloud publisher disabled")
+            return
+
+        try:
+            self._subscriber = rospy.Subscriber(
+                self.config.pointcloud_topic,
+                PointCloud2,
+                self._callback,
+                queue_size=1,
+                buff_size=2 ** 24,
+            )
+            self.logger.info("Pointcloud subscriber ready on %s", self.config.pointcloud_topic)
+        except Exception as exc:
+            self.logger.warning("Failed to subscribe pointcloud topic=%s: %s", self.config.pointcloud_topic, exc)
+
+    def stop(self) -> None:
+        if self._subscriber is not None:
+            try:
+                self._subscriber.unregister()
+            except Exception:
+                pass
+            self._subscriber = None
 
     def _callback(self, msg: PointCloud2) -> None:
         now = time.time()
@@ -368,11 +439,22 @@ class GalaxyPointCloudPublisher:
             )
             points = [[float(x), float(y), float(z)] for x, y, z in points_iter]
         except Exception as exc:
-            self.logger.warning("Failed to read pointcloud: %s", exc)
+            self._sampled_warning("Failed to read pointcloud: %s", exc)
+            return
+
+        if not points:
+            self._sampled_warning("Pointcloud is empty, skipping publish")
             return
 
         timestamp = _timestamp(msg.header.stamp if hasattr(msg, "header") else None)
         self.bridge.publish_pointcloud(points, timestamp=timestamp)
+
+    def _sampled_warning(self, message: str, *args) -> None:
+        now = time.time()
+        if now - self._last_warning_time < 5.0:
+            return
+        self._last_warning_time = now
+        self.logger.warning(message, *args)
 
 
 class GalaxyOdomPublisher:
@@ -381,13 +463,32 @@ class GalaxyOdomPublisher:
         self.bridge = bridge
         self.logger = logger or bridge.logger
         self._last_output_time = 0.0
+        self._last_warning_time = 0.0
         self._min_interval = 1.0 / max(float(self.config.odom_hz), 0.1)
-        self._subscriber = rospy.Subscriber(
-            self.config.odom_topic,
-            Odometry,
-            self._callback,
-            queue_size=1,
-        )
+        self._subscriber: Optional[rospy.Subscriber] = None
+
+        if not self.config.odom_topic:
+            self.logger.warning("Odom topic is empty, odom publisher disabled")
+            return
+
+        try:
+            self._subscriber = rospy.Subscriber(
+                self.config.odom_topic,
+                Odometry,
+                self._callback,
+                queue_size=1,
+            )
+            self.logger.info("Odom subscriber ready on %s", self.config.odom_topic)
+        except Exception as exc:
+            self.logger.warning("Failed to subscribe odom topic=%s: %s", self.config.odom_topic, exc)
+
+    def stop(self) -> None:
+        if self._subscriber is not None:
+            try:
+                self._subscriber.unregister()
+            except Exception:
+                pass
+            self._subscriber = None
 
     def _callback(self, msg: Odometry) -> None:
         now = time.time()
@@ -395,19 +496,31 @@ class GalaxyOdomPublisher:
             return
         self._last_output_time = now
 
-        p = msg.pose.pose.position
-        q = msg.pose.pose.orientation
-        pose = [
-            float(p.x),
-            float(p.y),
-            float(p.z),
-            float(q.x),
-            float(q.y),
-            float(q.z),
-            float(q.w),
-        ]
-        timestamp = _timestamp(msg.header.stamp if hasattr(msg, "header") else None)
+        try:
+            p = msg.pose.pose.position
+            q = msg.pose.pose.orientation
+            pose = [
+                float(p.x),
+                float(p.y),
+                float(p.z),
+                float(q.x),
+                float(q.y),
+                float(q.z),
+                float(q.w),
+            ]
+            timestamp = _timestamp(msg.header.stamp if hasattr(msg, "header") else None)
+        except Exception as exc:
+            self._sampled_warning("Failed to read odom: %s", exc)
+            return
+
         self.bridge.publish_odom(pose, timestamp=timestamp)
+
+    def _sampled_warning(self, message: str, *args) -> None:
+        now = time.time()
+        if now - self._last_warning_time < 5.0:
+            return
+        self._last_warning_time = now
+        self.logger.warning(message, *args)
 
 
 class GalaxyOnlineRuntime:
@@ -425,6 +538,8 @@ class GalaxyOnlineRuntime:
         self.logger.info("Galaxy online runtime started")
 
     def stop(self) -> None:
+        self.pointcloud.stop()
+        self.odom.stop()
         self.rgb.stop()
         self.bridge.stop()
         self.logger.info("Galaxy online runtime stopped")
