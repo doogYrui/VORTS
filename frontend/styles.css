@@ -368,17 +368,6 @@ textarea {
   display: block;
 }
 
-.stream-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  color: var(--muted);
-  background: linear-gradient(180deg, rgba(240, 245, 248, 0.7), rgba(232, 239, 244, 0.8));
-  text-align: center;
-}
-
 .monitor-layout {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
@@ -531,7 +520,6 @@ textarea {
 }
 
 .stream-stage:fullscreen .stream-image,
-.stream-stage:fullscreen .stream-overlay,
 .scene-graph-stage:fullscreen .scene-graph-canvas {
   border-radius: 0;
 }

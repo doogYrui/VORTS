@@ -104,17 +104,14 @@ export class ManagedSocket {
 
 
 export class JpegStreamPlayer {
-  constructor({ baseWsUrl, stageEl, imageEl, overlayEl }) {
+  constructor({ baseWsUrl, stageEl, imageEl }) {
     this.baseWsUrl = baseWsUrl;
     this.stageEl = stageEl;
     this.imageEl = imageEl;
-    this.overlayEl = overlayEl;
     this.source = null;
     this.socket = null;
     this.active = false;
-    this.lastFrameAt = 0;
     this.objectUrl = null;
-    this.watchdogTimer = null;
   }
 
   setSource(source) {
@@ -130,17 +127,12 @@ export class JpegStreamPlayer {
     }
 
     if (!this.source) {
-      this.overlayEl.hidden = false;
-      this.overlayEl.textContent = "等待视频流";
       this.#teardownSocket();
       return;
     }
 
     if (this.active) {
       this.#start();
-    } else {
-      this.overlayEl.hidden = false;
-      this.overlayEl.textContent = "视频已暂停";
     }
   }
 
@@ -152,13 +144,6 @@ export class JpegStreamPlayer {
   suspend() {
     this.active = false;
     this.#teardownSocket();
-    if (!this.source) {
-      this.overlayEl.hidden = false;
-      this.overlayEl.textContent = "等待视频流";
-      return;
-    }
-    this.overlayEl.hidden = false;
-    this.overlayEl.textContent = "视频已暂停";
   }
 
   destroy() {
@@ -176,9 +161,6 @@ export class JpegStreamPlayer {
       return;
     }
 
-    this.overlayEl.hidden = false;
-    this.overlayEl.textContent = `连接 ${this.source.label} 中...`;
-
     this.socket = new ManagedSocket({
       getUrl: () =>
         createSocketUrl(
@@ -186,13 +168,8 @@ export class JpegStreamPlayer {
           `/ws/video/${encodeURIComponent(this.source.robot)}/${encodeURIComponent(this.source.source)}`
         ),
       binaryType: "arraybuffer",
-      onOpen: () => {
-        this.overlayEl.hidden = false;
-        this.overlayEl.textContent = `已连接 ${this.source.label}，等待视频帧`;
-        this.#armWatchdog();
-      },
+      onOpen: () => {},
       onMessage: (event) => {
-        this.lastFrameAt = Date.now();
         const blob = new Blob([event.data], { type: "image/jpeg" });
         const nextUrl = URL.createObjectURL(blob);
         this.imageEl.src = nextUrl;
@@ -202,48 +179,18 @@ export class JpegStreamPlayer {
           }
           this.objectUrl = nextUrl;
         };
-        this.overlayEl.hidden = true;
       },
-      onClose: (_event, willReconnect) => {
-        if (!this.active || !this.source) {
-          return;
-        }
-        this.overlayEl.hidden = false;
-        this.overlayEl.textContent = willReconnect ? "视频连接断开，正在重连..." : "视频连接已关闭";
-      },
-      onError: () => {
-        if (!this.active || !this.source) {
-          return;
-        }
-        this.overlayEl.hidden = false;
-        this.overlayEl.textContent = "视频连接异常";
-      },
+      onClose: () => {},
+      onError: () => {},
     });
 
     this.socket.restart();
   }
 
   #teardownSocket() {
-    window.clearTimeout(this.watchdogTimer);
-    this.watchdogTimer = null;
     if (this.socket) {
       this.socket.close();
       this.socket = null;
     }
-  }
-
-  #armWatchdog() {
-    window.clearTimeout(this.watchdogTimer);
-    this.watchdogTimer = window.setTimeout(() => {
-      if (!this.active || !this.source) {
-        return;
-      }
-      const age = Date.now() - this.lastFrameAt;
-      if (age > 3500) {
-        this.overlayEl.hidden = false;
-        this.overlayEl.textContent = "暂未收到视频帧";
-      }
-      this.#armWatchdog();
-    }, 3500);
   }
 }

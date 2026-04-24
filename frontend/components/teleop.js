@@ -35,7 +35,6 @@ export class TeleopPage {
       baseWsUrl,
       stageEl: this.stageEl,
       imageEl: document.getElementById("teleopVideoImage"),
-      overlayEl: document.getElementById("teleopVideoOverlay"),
     });
 
     this.onKeyDown = this.#handleKeyDown.bind(this);

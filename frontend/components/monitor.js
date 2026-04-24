@@ -64,14 +64,12 @@ export class MonitorPage {
       baseWsUrl,
       stageEl: this.rgbStageEl,
       imageEl: document.getElementById("monitorRgbImage"),
-      overlayEl: document.getElementById("monitorRgbOverlay"),
     });
 
     this.globalPlayer = new JpegStreamPlayer({
       baseWsUrl,
       stageEl: this.globalStageEl,
       imageEl: document.getElementById("globalMonitorImage"),
-      overlayEl: document.getElementById("globalMonitorOverlay"),
     });
 
     this.onFullscreenChange = () => {
