@@ -12,19 +12,21 @@
 - 星海图机器人：`192.168.31.45`
 - 监控上位机：`192.168.31.220`
 
-除特别说明外，命令都在项目根目录 `VORTS/` 下执行。
+每段命令前都会标明目标机器；命令块中的 `cd` 路径就是该脚本的执行目录。
 
 ## 1. 主前后端
 
 在 `192.168.31.46` 上启动主后端：
 
 ```bash
+cd ~/doogYrui/VORTS
 python -m backend.app
 ```
 
 在 `192.168.31.46` 上启动主前端：
 
 ```bash
+cd ~/doogYrui/VORTS
 python frontend/server.py
 ```
 
@@ -39,21 +41,35 @@ http://114.214.211.251:1140/
 先在星海图机器人 `192.168.31.45` 上启动基础环境：
 
 ```bash
-bash ~/ZHXY/sh/launch_all.sh
+ssh nvidia@192.168.31.45
+cd ~/ZHXY/sh
+bash launch_all.sh
 ```
 
-然后在项目根目录分别启动下面两个脚本。
+然后将左右机械臂复位，继续在星海图机器人 `192.168.31.45` 的项目根目录下依次执行：
+
+```bash
+cd ~/doogYrui/VORTS
+bash webxr/robot/galaxy/sh/left0.sh
+bash webxr/robot/galaxy/sh/left1.sh
+bash webxr/robot/galaxy/sh/right0.sh
+bash webxr/robot/galaxy/sh/right1.sh
+```
+
+然后继续在星海图机器人 `192.168.31.45` 的项目根目录分别启动下面两个脚本。
 
 启动机器人在线桥接脚本：
 
 ```bash
-python -m robot.galaxy.run_galaxy_online
+cd ~/doogYrui/VORTS
+python3 -m robot.galaxy.run_galaxy_online
 ```
 
 启动机器人命令接收脚本：
 
 ```bash
-python robot/galaxy/galaxy_command_receiver.py
+cd ~/doogYrui/VORTS
+python3 robot/galaxy/galaxy_command_receiver.py
 ```
 
 说明：
@@ -66,20 +82,24 @@ python robot/galaxy/galaxy_command_receiver.py
 启动 WebXR 前，先在监控上位机 `192.168.31.220` 上启动监控相机发布器：
 
 ```bash
+ssh nvidia@192.168.31.220
+cd ~/doogYrui/VORTS
 export VORTS_BACKEND_HOST=192.168.31.46
-python -m robot.monitor.monitor_camera_publisher
+python3 -m robot.monitor.monitor_camera_publisher
 ```
 
 然后在 server `192.168.31.46` 上进入 `webxr/` 目录启动 WebXR 服务：
 
 ```bash
-cd webxr
+cd ~/doogYrui/VORTS/webxr
 python3 server.py
 ```
 
 再在星海图机器人 `192.168.31.45` 上启动 WebXR 控制接收脚本：
 
 ```bash
+ssh nvidia@192.168.31.45
+cd ~/doogYrui/VORTS
 python3 webxr/robot/galaxy/receiver.py
 ```
 
