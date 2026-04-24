@@ -4,15 +4,25 @@
 
 ## 启动顺序
 
-### 1. 在 Galaxy 机器人上启动基础环境
+### 1. 先启动主项目后端和前端
 
-先运行：
+WebXR 依赖主项目的后端和前端服务。先在 server 端分别启动：
 
 ```bash
-bash webxr/robot/galaxy/sh/launch_webxr.sh
+python -m backend.app
 ```
 
-### 2. 在 Galaxy 机器人上让双臂复位
+```bash
+python frontend/server.py
+```
+
+### 2. 在 server 端启动 WebXR 服务
+
+```bash
+python3 webxr/server.py
+```
+
+### 3. 在 Galaxy 机器人上让双臂复位
 
 按下面顺序依次执行：
 
@@ -23,23 +33,16 @@ bash webxr/robot/galaxy/sh/right0.sh
 bash webxr/robot/galaxy/sh/right1.sh
 ```
 
-### 3. 在 Galaxy 机器人上启动视频和控制接收脚本
+### 4. 在 Galaxy 机器人上启动控制接收脚本
 
 ```bash
-python3 webxr/robot/galaxy/rgb.py
 python3 webxr/robot/galaxy/receiver.py
 ```
 
 说明：
 
-- `rgb.py`：读取机器人相机画面，编码后通过 ZMQ 发给 server
+- RGB 视频已经合并到主机器人在线脚本 `robot/galaxy/galaxy_online_bridge.py`，不要再单独启动 `webxr/robot/galaxy/rgb.py`
 - `receiver.py`：接收 server 发来的 WebXR 控制数据，并发布到机器人 ROS 话题
-
-### 4. 在 server 端启动 WebXR 服务
-
-```bash
-python3 webxr/server.py
-```
 
 启动后，Quest 3 或浏览器访问：
 
@@ -74,7 +77,7 @@ https://114.214.211.251:1142/
 ### 机器人侧
 
 - [robot/galaxy/rgb.py](/home/rui/hw_task/mid_task/lite3_benchmark/VORTS/webxr/robot/galaxy/rgb.py)
-  读取 RealSense 画面并通过 ZMQ 推送给 server。
+  已由 `robot/galaxy/galaxy_online_bridge.py` 接管，不需要单独启动。
 
 - [robot/galaxy/receiver.py](/home/rui/hw_task/mid_task/lite3_benchmark/VORTS/webxr/robot/galaxy/receiver.py)
   接收手柄控制数据，并发布：
@@ -84,7 +87,6 @@ https://114.214.211.251:1142/
 
 - `robot/galaxy/sh/`
   机器人启动和测试脚本目录，包括：
-  - `launch_webxr.sh`
   - `left0.sh`
   - `left1.sh`
   - `right0.sh`

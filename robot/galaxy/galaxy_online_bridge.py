@@ -39,11 +39,15 @@ class GalaxyBridgeConfig:
     backend_host: str = _env("VORTS_BACKEND_HOST", _env("BACKEND_HOST", "192.168.31.46"))
     sensor_endpoint: str = _env("VORTS_SENSOR_ENDPOINT", "")
     command_endpoint: str = _env("VORTS_COMMAND_ENDPOINT", "")
+    webxr_video_endpoint: str = _env("VORTS_WEBXR_VIDEO_ENDPOINT", "")
     sensor_port: int = _env_int("VORTS_SENSOR_PORT", 6001)
     command_port: int = _env_int("VORTS_COMMAND_PORT", 6002)
+    webxr_video_port: int = _env_int("VORTS_WEBXR_VIDEO_PORT", 6004)
     left_serial: str = _env("GALAXY_LEFT_SN", "333422301212")
     right_serial: str = _env("GALAXY_RIGHT_SN", "346522071650")
     main_serial: str = _env("GALAXY_MAIN_SN", "347622072588")
+    webxr_video_robot_name: str = _env("GALAXY_WEBXR_VIDEO_ROBOT_NAME", "galaxy")
+    webxr_video_camera_name: str = _env("GALAXY_WEBXR_VIDEO_CAMERA_NAME", "rgb")
     pointcloud_topic: str = _env("GALAXY_POINTCLOUD_TOPIC", "/livox/lidar")
     odom_topic: str = _env("GALAXY_ODOM_TOPIC", "/local_odom")
     video_width: int = _env_int("GALAXY_VIDEO_WIDTH", 640)
@@ -64,6 +68,11 @@ class GalaxyBridgeConfig:
         if self.command_endpoint:
             return self.command_endpoint
         return f"tcp://{self.backend_host}:{self.command_port}"
+
+    def resolve_webxr_video_endpoint(self) -> str:
+        if self.webxr_video_endpoint:
+            return self.webxr_video_endpoint
+        return f"tcp://{self.backend_host}:{self.webxr_video_port}"
 
 
 def _sample_points(points: list[list[float]], max_points: int) -> list[list[float]]:
@@ -106,6 +115,7 @@ class GalaxyZMQBridge:
         self.logger = logger or self._build_logger()
         self._context = zmq.Context.instance()
         self._publish_socket: Optional[zmq.Socket] = None
+        self._webxr_video_socket: Optional[zmq.Socket] = None
         self._command_socket: Optional[zmq.Socket] = None
         self._send_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -128,6 +138,10 @@ class GalaxyZMQBridge:
         self._publish_socket.setsockopt(zmq.SNDHWM, 32)
         self._publish_socket.connect(self.config.resolve_sensor_endpoint())
 
+        self._webxr_video_socket = self._context.socket(zmq.PUB)
+        self._webxr_video_socket.setsockopt(zmq.SNDHWM, 32)
+        self._webxr_video_socket.connect(self.config.resolve_webxr_video_endpoint())
+
         self._command_socket = self._context.socket(zmq.SUB)
         self._command_socket.setsockopt_string(zmq.SUBSCRIBE, f"teleop.{self.config.robot_name}")
         self._command_socket.setsockopt_string(zmq.SUBSCRIBE, "task.broadcast")
@@ -138,9 +152,10 @@ class GalaxyZMQBridge:
         self._command_thread.start()
 
         self.logger.info(
-            "ZMQ bridge started: sensor=%s command=%s",
+            "ZMQ bridge started: sensor=%s command=%s webxr_video=%s",
             self.config.resolve_sensor_endpoint(),
             self.config.resolve_command_endpoint(),
+            self.config.resolve_webxr_video_endpoint(),
         )
 
     def stop(self) -> None:
@@ -156,6 +171,10 @@ class GalaxyZMQBridge:
             self._publish_socket.close(0)
             self._publish_socket = None
 
+        if self._webxr_video_socket is not None:
+            self._webxr_video_socket.close(0)
+            self._webxr_video_socket = None
+
     def publish_video(self, camera_name: str, frame_bgr: np.ndarray) -> None:
         if self._publish_socket is None:
             return
@@ -164,6 +183,26 @@ class GalaxyZMQBridge:
         topic = _frame_to_topic(self.config.robot_name, camera_name)
         with self._send_lock:
             self._publish_socket.send_multipart([topic.encode("utf-8"), payload])
+
+    def publish_webxr_rgb(self, frame_bgr: np.ndarray, capture_ts: Optional[float] = None) -> None:
+        if self._webxr_video_socket is None:
+            return
+
+        timestamp = float(capture_ts if capture_ts is not None else time.time())
+        payload = _encode_jpeg(frame_bgr, self.config.jpeg_quality)
+        topic = _frame_to_topic(self.config.webxr_video_robot_name, self.config.webxr_video_camera_name)
+        metadata = json.dumps(
+            {
+                "capture_ts": timestamp,
+                "camera": self.config.webxr_video_camera_name,
+                "robot": self.config.webxr_video_robot_name,
+                "width": self.config.video_width,
+                "height": self.config.video_height,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        with self._send_lock:
+            self._webxr_video_socket.send_multipart([topic.encode("utf-8"), metadata, payload])
 
     def publish_pointcloud(self, points: Iterable[Iterable[float]], timestamp: Optional[float] = None) -> None:
         if self._publish_socket is None:
@@ -357,6 +396,21 @@ class RealSenseDualCameraPublisher:
             return None
         return np.asanyarray(color_frame.get_data())
 
+    @staticmethod
+    def _label_webxr_frame(frame_bgr: np.ndarray, serial_number: str) -> np.ndarray:
+        frame = frame_bgr.copy()
+        cv2.putText(
+            frame,
+            f"CAMERA {serial_number}",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+        return frame
+
     def _run(self) -> None:
         period = 1.0 / max(float(self.config.video_fps), 1.0)
         next_tick = time.monotonic()
@@ -383,10 +437,15 @@ class RealSenseDualCameraPublisher:
                 self.bridge.publish_video("right_arm", right_img)
             else:
                 self.bridge.publish_video("right_arm", self._placeholders["right_arm"])
+
             if main_img is not None:
                 self.bridge.publish_video("main", main_img)
+                self.bridge.publish_webxr_rgb(self._label_webxr_frame(main_img, self.config.main_serial))
             else:
                 self.bridge.publish_video("main", self._placeholders["main"])
+                self.bridge.publish_webxr_rgb(
+                    self._label_webxr_frame(self._placeholders["main"], self.config.main_serial)
+                )
 
             next_tick += period
 
